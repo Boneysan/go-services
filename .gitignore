@@ -1,0 +1,17 @@
+# Build artifacts for go-services (Phase 1+)
+logger
+nats-bridge
+sheet-api
+gm-api
+proxy
+bin/
+*.test
+*.out
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+# OS
+.DS_Store
+Thumbs.db

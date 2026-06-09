@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	nats "github.com/nats-io/nats.go"
 	"github.com/boneysan/ryzom/go-services/internal/config"
+	"github.com/boneysan/ryzom/go-services/internal/health"
 )
 
 // EntityEvent published to NATS (from mirror DELTA)
@@ -46,6 +48,7 @@ func main() {
 	namingPort := config.Env("NEL_NAMING_PORT", "50000")
 	myMirrorPort := config.Env("MIRROR_PORT", "47805") // example
 	zoneID := config.Env("ZONE_ID", "demo")
+	healthAddr := config.Env("BRIDGE_HEALTH_ADDR", ":47806") // observable like logger (Phase 1.3 polish)
 
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
@@ -76,7 +79,19 @@ func main() {
 	slog.Info("nats-bridge starting",
 		"nats", natsURL,
 		"naming", namingHost+":"+namingPort,
+		"health", healthAddr,
 	)
+
+	// Minimal health server (reuses internal/health; makes bridge observable in compose/healthchecks)
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /health", health.Handler(map[string]string{"nats": natsURL, "zone": zoneID}))
+		hs := &http.Server{Addr: healthAddr, Handler: mux}
+		slog.Info("nats-bridge health starting", "addr", healthAddr)
+		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("nats-bridge health exited", "err", err)
+		}
+	}()
 
 	// Phase 1.3 Step 1: Do real(ish) naming lookup for mirror_service, then bridge DELTAs.
 	go func() {
