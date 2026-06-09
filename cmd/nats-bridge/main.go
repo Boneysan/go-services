@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,6 +20,10 @@ import (
 	"github.com/boneysan/ryzom/go-services/internal/config"
 	"github.com/boneysan/ryzom/go-services/internal/health"
 )
+
+// mirrorConnected is package-level so the resilience loop and health handler can share it
+// (exposed dynamically in /health for live validation monitoring).
+var mirrorConnected atomic.Bool
 
 // EntityEvent published to NATS (from mirror DELTA)
 type EntityEvent struct {
@@ -82,10 +87,17 @@ func main() {
 		"health", healthAddr,
 	)
 
-	// Minimal health server (reuses internal/health; makes bridge observable in compose/healthchecks)
+	// Minimal health server (reuses internal/health + dynamic mirror status for live validation)
 	go func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("GET /health", health.Handler(map[string]string{"nats": natsURL, "zone": zoneID}))
+		mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+			extra := map[string]string{
+				"nats":   natsURL,
+				"zone":   zoneID,
+				"mirror": map[bool]string{true: "connected", false: "disconnected"}[mirrorConnected.Load()],
+			}
+			health.Handler(extra)(w, r)
+		})
 		hs := &http.Server{Addr: healthAddr, Handler: mux}
 		slog.Info("nats-bridge health starting", "addr", healthAddr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -193,10 +205,12 @@ func connectToMirrorAndBridge(js nats.JetStreamContext, mirrorAddr, namingHost, 
 	for {
 		conn, err := net.Dial("tcp", mirrorAddr)
 		if err != nil {
+			mirrorConnected.Store(false)
 			slog.Warn("mirror connect failed, will retry", "addr", mirrorAddr, "err", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		mirrorConnected.Store(true)
 		slog.Info("connected to mirror_service for DELTA bridge", "addr", mirrorAddr, "zone", zoneID)
 
 		// Read loop for NeL CMessages containing "DELTA" and "TOCK".
@@ -206,6 +220,7 @@ func connectToMirrorAndBridge(js nats.JetStreamContext, mirrorAddr, namingHost, 
 		for {
 			n, err := conn.Read(buf)
 			if err != nil {
+				mirrorConnected.Store(false)
 				slog.Warn("mirror read err, will reconnect", "err", err)
 				conn.Close()
 				break // exit inner read loop → outer will retry dial
