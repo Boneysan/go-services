@@ -117,6 +117,7 @@ func main() {
 
 	// For testing the parser without full mirror (set TEST_DELTA=1):
 	if os.Getenv("TEST_DELTA") != "" {
+		mirrorConnected.Store(true) // simulate connected for demo/live health in harness (real connect will set it in live mode)
 		go func() {
 			// Example mock DELTA payload (after "DELTA" name): gamecycle + sheet + header + add section
 			mock := make([]byte, 0)
