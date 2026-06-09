@@ -187,53 +187,54 @@ func lookupMirrorViaNaming(host, port string) string {
 // connectToMirrorAndBridge implements the core of the NATS bridge (Task 1.3 Step 1).
 // Connects to mirror_service (via naming lookup with retries), reads DELTA/TOCK messages (per Investigation Task 7 + CDeltaToMS),
 // and republishes entity state to NATS for consumers (Godot proxy, GM dashboard, etc.).
+// Resilience: outer retry loop around dial + inner read; survives mirror restarts, transient network issues during live validation.
 // To fully validate/retire mirror for new consumers: run with live C++ mirror (after local build), capture real DELTA packets, confirm no data loss.
 func connectToMirrorAndBridge(js nats.JetStreamContext, mirrorAddr, namingHost, namingPort, zoneID string) {
-	conn, err := net.Dial("tcp", mirrorAddr)
-	if err != nil {
-		slog.Error("mirror connect failed", "addr", mirrorAddr, "err", err)
-		return
-	}
-	defer conn.Close()
-	slog.Info("connected to mirror_service for DELTA bridge", "addr", mirrorAddr, "zone", zoneID)
-
-	// Read loop for NeL CMessages containing "DELTA" and "TOCK".
-	// DELTA format (from source + checklist): gamecycle, per-dataset (sheetId + header flags + sections:
-	// adds (row + CEntityId + spawner), removes, prop changes (propIndex + (row, ts, value)...)).
-	buf := make([]byte, 8192)
 	for {
-		n, err := conn.Read(buf)
+		conn, err := net.Dial("tcp", mirrorAddr)
 		if err != nil {
-			slog.Warn("mirror read err, continuing for demo (real impl may reconnect)", "err", err)
-			time.Sleep(1 * time.Second)
+			slog.Warn("mirror connect failed, will retry", "addr", mirrorAddr, "err", err)
+			time.Sleep(2 * time.Second)
 			continue
 		}
-		data := buf[:n]
+		slog.Info("connected to mirror_service for DELTA bridge", "addr", mirrorAddr, "zone", zoneID)
 
-		// Real-ish DELTA/TOCK parser (followup 2: hardened from heuristic)
-		// Based on CDeltaToMS + Investigation #7: after CMessage name,
-		// uint32 gamecycle, then per dataset: uint32 sheetId, uint8 header (flags),
-		// conditional sections for adds (row+CEntityId+spawner), removes, props.
-		name, off := extractCMessageName(data)
-		if name == "DELTA" {
-			// Hardened parser: real binary for CDeltaToMS / Investigation #7
-			// After CMessage name: [optional gamecycle uint32], then per-dataset:
-			// uint32 sheetId, uint8 header (flags: 1=bind,2=add,4=rem,8=prop,16=sync)
-			// then conditional sections: adds (uint32 row + [16]eid + uint8 spawner ... until 0xffffffff),
-			// removes, props (uint16 propIdx + (row, ts, value)...)
-			parseAndPublishDelta(js, data, off, zoneID)
-		}
+		// Read loop for NeL CMessages containing "DELTA" and "TOCK".
+		// DELTA format (from source + checklist): gamecycle, per-dataset (sheetId + header flags + sections:
+		// adds (row + CEntityId + spawner), removes, prop changes (propIndex + (row, ts, value)...)).
+		buf := make([]byte, 8192)
+		for {
+			n, err := conn.Read(buf)
+			if err != nil {
+				slog.Warn("mirror read err, will reconnect", "err", err)
+				conn.Close()
+				break // exit inner read loop → outer will retry dial
+			}
+			data := buf[:n]
 
-		if name == "TOCK" {
-			payload, _ := json.Marshal(map[string]uint32{"tick": uint32(time.Now().Unix())})
-			_, _ = js.Publish("server.tick", payload)
-			slog.Debug("published TOCK to NATS")
+			// Real-ish DELTA/TOCK parser (followup 2: hardened from heuristic)
+			// Based on CDeltaToMS + Investigation #7: after CMessage name,
+			// uint32 gamecycle, then per dataset: uint32 sheetId, uint8 header (flags),
+			// conditional sections for adds (row+CEntityId+spawner), removes, props.
+			name, off := extractCMessageName(data)
+			if name == "DELTA" {
+				// Hardened parser: real binary for CDeltaToMS / Investigation #7
+				// After CMessage name: [optional gamecycle uint32], then per-dataset:
+				// uint32 sheetId, uint8 header (flags: 1=bind,2=add,4=rem,8=prop,16=sync)
+				// then conditional sections: adds (uint32 row + [16]eid + uint8 spawner ... until 0xffffffff),
+				// removes, props (uint16 propIdx + (row, ts, value)...)
+				parseAndPublishDelta(js, data, off, zoneID)
+			}
+
+			if name == "TOCK" {
+				payload, _ := json.Marshal(map[string]uint32{"tick": uint32(time.Now().Unix())})
+				_, _ = js.Publish("server.tick", payload)
+				slog.Debug("published TOCK to NATS")
+			}
 		}
+		// small backoff before next dial attempt
+		time.Sleep(1 * time.Second)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) > 0 && (s[0:len(sub)] == sub || contains(s[1:], sub)))
 }
 
 // extractCMessageName finds a CMessage name (uint32 len + string after 4-byte header)
