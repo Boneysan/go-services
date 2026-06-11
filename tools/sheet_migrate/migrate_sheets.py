@@ -10,9 +10,13 @@ Georges FORM facts (verified against the corpus, 2026-06-11):
   - Each .sbrick is a <FORM> whose first <STRUCT> is the sheet body; ATOMs
     and named STRUCTs (Basics, Client, faber, Create, Mandatory, Optional,
     Parameter, Credit) nest beneath it.
-  - Brick type is encoded by the second-level directory (root -> Mandatory,
-    credit -> Credit, optional -> Optional); 19 files also carry an explicit
-    Mandatory/Optional/Parameter/Credit STRUCT, which takes precedence.
+  - brick_type comes from Basics.FamilyId classified through the TBrickFamily
+    enum ranges in game_share/brick_families.h — exactly what the C++ client's
+    CSBrickSheet::isRoot()/isCredit()/... do. The Mandatory/Optional/
+    Parameter/Credit STRUCTs on a brick are NOT its type: they are the family
+    lists of bricks allowed to attach to it (root bricks carry them); they are
+    preserved in extras for the phrase validator. Directory placement is only
+    a fallback for FamilyIds missing from the enum.
   - "SPCost" (476 files) is the skill-point cost. HP/SAP/STA costs appear as
     "Property N" atoms of the form "SAP:10" (rare).
   - "LearnRequiresOneOfSkills" is "<SKILL> <level>", e.g. "SF 0".
@@ -35,6 +39,8 @@ from pathlib import Path
 
 DEFAULT_SHEETS = (Path(__file__).resolve().parents[3]
                   / "ryzomcore_leveldesign/game_element/sbrick")
+DEFAULT_FAMILIES_H = (Path(__file__).resolve().parents[3]
+                      / "ryzomcore/ryzom/common/src/game_share/brick_families.h")
 
 FAMILY_BY_DIR = {
     "fight": "Combat",
@@ -46,9 +52,66 @@ FAMILY_BY_DIR = {
     "interface": "Interface",
     "timed_action": "TimedAction",
 }
-TYPE_BY_SUBDIR = {"root": "Mandatory", "credit": "Credit", "optional": "Optional"}
-EXPLICIT_TYPE_STRUCTS = ("Mandatory", "Optional", "Parameter", "Credit")
+TYPE_BY_SUBDIR = {"root": "Root", "credit": "Credit", "optional": "Optional"}
 COST_KEYS = {"SAP": "sap_cost", "HP": "hp_cost", "STA": "sta_cost"}
+
+
+class BrickFamilies:
+    """TBrickFamily enum from brick_families.h, with the same range
+    classification as BRICK_FAMILIES::isRootFamily()/isCreditFamily()/etc.
+    Sentinel ranges aliased to AutoCodeCheck never match a real family."""
+
+    # (type, range-name-prefix) pairs mirroring the is*Family() functions; the
+    # check order matters only for safety — ranges are disjoint in the enum.
+    RANGE_GROUPS = [
+        ("Root", ["CombatRoot", "MagicRoot", "FaberRoot", "HarvestRoot",
+                  "ForageProspectionRoot", "ForageExtractionRoot", "PowerRoot",
+                  "ProcEnchantement"]),
+        ("Mandatory", ["CombatMandatory", "MagicMandatory", "FaberMandatory",
+                       "HarvestMandatory", "ForageProspectionMandatory",
+                       "ForageExtractionMandatory", "PowerMandatory"]),
+        ("Optional", ["CombatOption", "MagicOption", "FaberOption",
+                      "HarvestOption", "ForageProspectionOption",
+                      "ForageExtractionOption"]),
+        ("Credit", ["CombatCredit", "MagicCredit", "FaberCredit",
+                    "HarvestCredit", "ForageProspectionCredit",
+                    "ForageExtractionCredit", "MagicPowerCredit"]),
+        ("Parameter", ["CombatParameter", "MagicParameter", "FaberParameter",
+                       "HarvestParameter", "ForageProspectionParameter",
+                       "ForageExtractionParameter", "PowerParameter"]),
+    ]
+
+    def __init__(self, header: Path):
+        body = re.search(r"enum\s+TBrickFamily\s*\{(.*?)\};", header.read_text(), re.S)
+        if not body:
+            raise SystemExit(f"TBrickFamily enum not found in {header}")
+        text = re.sub(r"/\*.*?\*/", "", body.group(1), flags=re.S)  # block comments
+        text = re.sub(r"//[^\n]*", "", text)  # line comments
+        self.values: dict[str, int] = {}
+        counter = 0
+        for entry in text.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "=" in entry:
+                name, expr = (p.strip() for p in entry.split("=", 1))
+                counter = self.values[expr] if expr in self.values else int(expr)
+            else:
+                name = entry
+            self.values[name] = counter
+            counter += 1
+
+    def classify(self, family_id: str) -> str | None:
+        v = self.values.get(family_id)
+        if v is None:
+            return None
+        for btype, ranges in self.RANGE_GROUPS:
+            for rng in ranges:
+                lo = self.values.get("Begin" + rng)
+                hi = self.values.get("End" + rng)
+                if lo is not None and hi is not None and lo <= v <= hi:
+                    return btype
+        return None
 
 
 def struct_to_dict(node: ET.Element) -> dict:
@@ -67,7 +130,8 @@ def struct_to_dict(node: ET.Element) -> dict:
     return out
 
 
-def parse_sbrick(path: Path, sheets_root: Path, warnings: list[str]) -> dict | None:
+def parse_sbrick(path: Path, sheets_root: Path, warnings: list[str],
+                 families: BrickFamilies | None = None) -> dict | None:
     try:
         form = ET.parse(path).getroot()
     except ET.ParseError as e:
@@ -83,9 +147,13 @@ def parse_sbrick(path: Path, sheets_root: Path, warnings: list[str]) -> dict | N
     top = rel.parts[0] if len(rel.parts) > 1 else ""
     sub = rel.parts[1] if len(rel.parts) > 2 else ""
 
-    brick_type = next((s for s in EXPLICIT_TYPE_STRUCTS if s in data), None)
+    brick_type = families.classify(basics.get("FamilyId", "")) if families else None
     if brick_type is None:
         brick_type = TYPE_BY_SUBDIR.get(sub)
+        if basics.get("FamilyId"):
+            warnings.append(
+                f"{path}: FamilyId {basics['FamilyId']!r} not in TBrickFamily enum; "
+                f"directory fallback -> {brick_type}")
 
     skill_req, skill_min = None, 0
     learn = basics.get("LearnRequiresOneOfSkills", "")
@@ -138,13 +206,17 @@ COLS = ["id", "family", "brick_type", "skill_req", "skill_min",
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sheets", type=Path, default=DEFAULT_SHEETS)
+    ap.add_argument("--families-h", type=Path, default=DEFAULT_FAMILIES_H)
     ap.add_argument("--out-sql", type=Path, default=None)
     ap.add_argument("--db-url", default=None)
     args = ap.parse_args()
 
+    families = BrickFamilies(args.families_h)
+    print(f"parsed {len(families.values)} TBrickFamily enum entries", file=sys.stderr)
+
     files = sorted(args.sheets.rglob("*.sbrick"))
     warnings: list[str] = []
-    rows = [r for f in files if (r := parse_sbrick(f, args.sheets, warnings))]
+    rows = [r for f in files if (r := parse_sbrick(f, args.sheets, warnings, families))]
     print(f"parsed {len(rows)}/{len(files)} .sbrick files", file=sys.stderr)
 
     if warnings:

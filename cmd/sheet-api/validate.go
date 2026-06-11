@@ -4,21 +4,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
-// Phrase validation — first-pass permissive validator (Phase 4 plan, Task
-// 4.1b step 5 + risk register: "ship a permissive validator that checks basic
-// type constraints first, then tighten rules as the rule set is confirmed").
+// Phrase validation — mirrors the C++ client's phrase builder rules.
 //
-// Rules enforced now (Sabrina brick system, from .sbrick corpus semantics):
-//  1. the brick list must be non-empty and free of duplicates
-//  2. every brick must exist in the bricks table
-//  3. at most one Mandatory (root) brick per phrase
-//  4. SabrinaCost balance: bricks carry positive cost, Credit bricks carry
+// Investigation note (2026-06-11): the EGS's own validateSabrinaGrammar() in
+// phrase_manager/s_phrase.h is a stub returning true — the legacy server
+// TRUSTED the client to compose legal phrases. Since the Godot client
+// replaces that client, this validator is now the authoritative gatekeeper.
+//
+// Rules, mirrored from CDBGroupBuildPhrase / CSBrickSheet semantics:
+//  1. the first brick must be a Root brick (the action anchor)
+//  2. every other brick's family must appear in the root's Mandatory/
+//     Optional/Parameter/Credit family lists (stored in extras by the
+//     importer, e.g. extras.Optional = {"f0": "BFOA", ...})
+//  3. every family in the root's Mandatory list must be present
+//  4. at most one brick per family (families are progression tiers)
+//  5. SabrinaCost balance: bricks cost positive, Credit bricks carry
 //     negative cost; the phrase total must not exceed zero
+//  6. no duplicate brick ids; all ids must exist
 //
-// Not yet enforced (needs CSPhraseCom dive in the EGS): per-family
-// compatibility, Parameter brick requirements, skill-line consistency.
+// brick_type comes from Basics.FamilyId classified through the TBrickFamily
+// enum ranges (game_share/brick_families.h) at import time.
 
 type Brick struct {
 	ID        string          `json:"id" db:"id"`
@@ -40,66 +48,146 @@ type ValidateResult struct {
 	Errors []string `json:"errors"`
 }
 
-// sabrinaCost reads extras.Basics.SabrinaCost ("-10", "15", absent -> 0).
-func sabrinaCost(b Brick) int {
-	var extras struct {
-		Basics struct {
-			SabrinaCost string `json:"SabrinaCost"`
-		} `json:"Basics"`
-	}
-	if err := json.Unmarshal(b.Extras, &extras); err != nil {
-		return 0
-	}
-	n, err := strconv.Atoi(extras.Basics.SabrinaCost)
+// brickExtras is the slice of the imported .sbrick form the validator needs.
+type brickExtras struct {
+	Basics struct {
+		FamilyId    string `json:"FamilyId"`
+		SabrinaCost string `json:"SabrinaCost"`
+	} `json:"Basics"`
+	Mandatory map[string]string `json:"Mandatory"`
+	Optional  map[string]string `json:"Optional"`
+	Parameter map[string]string `json:"Parameter"`
+	Credit    map[string]string `json:"Credit"`
+}
+
+func parseExtras(b Brick) brickExtras {
+	var e brickExtras
+	json.Unmarshal(b.Extras, &e) // zero value on error: no family, cost 0
+	return e
+}
+
+func (e brickExtras) sabrinaCost() int {
+	n, err := strconv.Atoi(e.Basics.SabrinaCost)
 	if err != nil {
 		return 0
 	}
 	return n
 }
 
+// attachLists returns the family sets a root brick accepts, keyed by slot
+// kind. Empty f-values in the form are skipped.
+func (e brickExtras) attachLists() map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for kind, fams := range map[string]map[string]string{
+		"Mandatory": e.Mandatory, "Optional": e.Optional,
+		"Parameter": e.Parameter, "Credit": e.Credit,
+	} {
+		set := map[string]bool{}
+		for _, fam := range fams {
+			if fam != "" {
+				set[fam] = true
+			}
+		}
+		out[kind] = set
+	}
+	return out
+}
+
+func isType(b Brick, t string) bool { return b.BrickType != nil && *b.BrickType == t }
+
 func ValidatePhrase(requested []string, found []Brick) ValidateResult {
 	errs := []string{}
 	if len(requested) == 0 {
-		errs = append(errs, "phrase has no bricks")
-		return ValidateResult{Valid: false, Errors: errs}
-	}
-
-	seen := map[string]bool{}
-	for _, id := range requested {
-		if seen[id] {
-			errs = append(errs, fmt.Sprintf("duplicate brick: %s", id))
-		}
-		seen[id] = true
+		return ValidateResult{Valid: false, Errors: []string{"phrase has no bricks"}}
 	}
 
 	byID := map[string]Brick{}
 	for _, b := range found {
 		byID[b.ID] = b
 	}
+	seen := map[string]bool{}
+	allKnown := true
 	for _, id := range requested {
+		if seen[id] {
+			errs = append(errs, "duplicate brick: "+id)
+			continue
+		}
+		seen[id] = true
 		if _, ok := byID[id]; !ok {
-			errs = append(errs, fmt.Sprintf("unknown brick: %s", id))
+			errs = append(errs, "unknown brick: "+id)
+			allKnown = false
+		}
+	}
+	if !allKnown {
+		// Structural rules need every brick's sheet data; stop here.
+		return ValidateResult{Valid: false, Errors: errs}
+	}
+
+	root := byID[requested[0]]
+	rootExtras := parseExtras(root)
+	if !isType(root, "Root") {
+		errs = append(errs, fmt.Sprintf("first brick %s is not a root brick (type %s)",
+			root.ID, strOr(root.BrickType, "unknown")))
+		return ValidateResult{Valid: false, Errors: errs}
+	}
+	lists := rootExtras.attachLists()
+
+	total := rootExtras.sabrinaCost()
+	famUsed := map[string]string{rootExtras.Basics.FamilyId: root.ID}
+	for _, id := range requested[1:] {
+		if id == requested[0] {
+			continue // duplicate already reported
+		}
+		b := byID[id]
+		e := parseExtras(b)
+		fam := e.Basics.FamilyId
+		total += e.sabrinaCost()
+
+		if fam == "" {
+			errs = append(errs, fmt.Sprintf("brick %s has no family — not a phrase component", id))
+			continue
+		}
+		if prev, used := famUsed[fam]; used {
+			errs = append(errs, fmt.Sprintf("bricks %s and %s are both family %s — one per family", prev, id, fam))
+			continue
+		}
+		famUsed[fam] = id
+		if !lists["Mandatory"][fam] && !lists["Optional"][fam] &&
+			!lists["Parameter"][fam] && !lists["Credit"][fam] {
+			errs = append(errs, fmt.Sprintf("brick %s (family %s) does not fit root %s — allowed: %s",
+				id, fam, root.ID, joinLists(lists)))
 		}
 	}
 
-	mandatory := 0
-	total := 0
-	for id := range seen {
-		b, ok := byID[id]
-		if !ok {
-			continue
+	for fam := range lists["Mandatory"] {
+		if _, ok := famUsed[fam]; !ok {
+			errs = append(errs, fmt.Sprintf("root %s requires a brick from mandatory family %s", root.ID, fam))
 		}
-		if b.BrickType != nil && *b.BrickType == "Mandatory" {
-			mandatory++
-		}
-		total += sabrinaCost(b)
 	}
-	if mandatory > 1 {
-		errs = append(errs, fmt.Sprintf("phrase has %d mandatory (root) bricks, max 1", mandatory))
-	}
+
 	if total > 0 {
 		errs = append(errs, fmt.Sprintf("brick cost %d exceeds credit — add credit bricks", total))
 	}
 
 	return ValidateResult{Valid: len(errs) == 0, Errors: errs}
+}
+
+func strOr(s *string, fallback string) string {
+	if s == nil {
+		return fallback
+	}
+	return *s
+}
+
+func joinLists(lists map[string]map[string]bool) string {
+	var fams []string
+	for _, kind := range []string{"Mandatory", "Optional", "Parameter", "Credit"} {
+		for fam := range lists[kind] {
+			fams = append(fams, fam)
+		}
+	}
+	if len(fams) == 0 {
+		return "none"
+	}
+	return strings.Join(fams, " ")
 }

@@ -2,66 +2,116 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
-func brick(id, btype string, sabrina int) Brick {
-	extras, _ := json.Marshal(map[string]any{
-		"Basics": map[string]string{"SabrinaCost": jsonInt(sabrina)},
-	})
-	b := Brick{ID: id, Extras: extras}
+// Fixtures mirror the real fight bricks: bfpa01 is the combat root accepting
+// Optional families BFOA.. and Credit families BFCA..; bfca01 is a -6 credit.
+
+func mkBrick(id, btype, family string, sabrina int, lists map[string][]string) Brick {
+	extras := map[string]any{
+		"Basics": map[string]string{
+			"FamilyId":    family,
+			"SabrinaCost": fmt.Sprintf("%d", sabrina),
+		},
+	}
+	for kind, fams := range lists {
+		m := map[string]string{}
+		for i, f := range fams {
+			m[fmt.Sprintf("f%d", i)] = f
+		}
+		extras[kind] = m
+	}
+	raw, _ := json.Marshal(extras)
+	b := Brick{ID: id, Extras: raw}
 	if btype != "" {
 		b.BrickType = &btype
 	}
 	return b
 }
 
-func jsonInt(n int) string {
-	b, _ := json.Marshal(n)
-	return string(b) // SabrinaCost is stored as a string atom, e.g. "-10"
+var (
+	rootFight = mkBrick("bfpa01", "Root", "BFPA", 0, map[string][]string{
+		"Optional": {"BFOA", "BFOB"},
+		"Credit":   {"BFCA", "BFCB"},
+	})
+	rootNeedy = mkBrick("bmpa01", "Root", "BMPA", 0, map[string][]string{
+		"Mandatory": {"BMMA"},
+		"Credit":    {"BMCA"},
+	})
+	optA    = mkBrick("bfoa01", "Optional", "BFOA", 5, nil)
+	optA2   = mkBrick("bfoa02", "Optional", "BFOA", 8, nil)
+	optB    = mkBrick("bfob01", "Optional", "BFOB", 0, nil)
+	credit6 = mkBrick("bfca01", "Credit", "BFCA", -6, nil)
+	mandM   = mkBrick("bmma01", "Mandatory", "BMMA", 0, nil)
+	alien   = mkBrick("bhfa01", "Optional", "BHFA", 0, nil) // family not in root lists
+	noFam   = mkBrick("big01", "", "", 0, nil)              // interface brick
+)
+
+func validate(req []string, found ...Brick) ValidateResult {
+	return ValidatePhrase(req, found)
 }
 
-func TestValidatePhrase(t *testing.T) {
-	root := brick("bfpa01", "Mandatory", 10)
-	root2 := brick("bfpa02", "Mandatory", 0)
-	credit := brick("bfca01", "Credit", -15)
-	opt := brick("bfma01", "Optional", 5)
-
+func TestValidatePhraseStructure(t *testing.T) {
 	cases := []struct {
-		name      string
-		requested []string
-		found     []Brick
-		valid     bool
-		errCount  int
+		name    string
+		req     []string
+		found   []Brick
+		valid   bool
+		errPart string
 	}{
-		{"empty phrase", nil, nil, false, 1},
-		{"unknown brick", []string{"nope"}, nil, false, 1},
-		{"duplicate brick", []string{"bfpa01", "bfpa01"}, []Brick{root}, false, 2}, // dup + cost 10 uncovered
-		{"two mandatory", []string{"bfpa01", "bfpa02"}, []Brick{root, root2}, false, 2},
-		{"cost uncovered", []string{"bfpa01", "bfma01"}, []Brick{root, opt}, false, 1},
-		{"cost covered by credit", []string{"bfpa01", "bfca01"}, []Brick{root, credit}, true, 0},
-		{"root plus optional plus credit", []string{"bfpa01", "bfma01", "bfca01"}, []Brick{root, opt, credit}, true, 0},
-		{"free root alone", []string{"bfpa02"}, []Brick{root2}, true, 0},
+		{"empty", nil, nil, false, "no bricks"},
+		{"unknown", []string{"nope"}, nil, false, "unknown brick"},
+		{"duplicate", []string{"bfpa01", "bfpa01"}, []Brick{rootFight}, false, "duplicate"},
+		{"root alone", []string{"bfpa01"}, []Brick{rootFight}, true, ""},
+		{"first brick not root", []string{"bfoa01", "bfpa01"}, []Brick{optA, rootFight}, false, "not a root"},
+		{"optional fits", []string{"bfpa01", "bfob01"}, []Brick{rootFight, optB}, true, ""},
+		{"alien family rejected", []string{"bfpa01", "bhfa01"}, []Brick{rootFight, alien}, false, "does not fit root"},
+		{"no-family brick rejected", []string{"bfpa01", "big01"}, []Brick{rootFight, noFam}, false, "no family"},
+		{"two bricks same family", []string{"bfpa01", "bfoa01", "bfoa02"},
+			[]Brick{rootFight, optA, optA2}, false, "one per family"},
+		{"missing mandatory slot", []string{"bmpa01"}, []Brick{rootNeedy}, false, "mandatory family BMMA"},
+		{"mandatory slot filled", []string{"bmpa01", "bmma01"}, []Brick{rootNeedy, mandM}, true, ""},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ValidatePhrase(tc.requested, tc.found)
+			got := validate(tc.req, tc.found...)
 			if got.Valid != tc.valid {
 				t.Fatalf("valid = %v, want %v (errors: %v)", got.Valid, tc.valid, got.Errors)
 			}
-			if len(got.Errors) != tc.errCount {
-				t.Fatalf("errors = %v, want %d", got.Errors, tc.errCount)
+			if tc.errPart != "" && !strings.Contains(strings.Join(got.Errors, "; "), tc.errPart) {
+				t.Fatalf("errors %v missing %q", got.Errors, tc.errPart)
 			}
 		})
 	}
 }
 
-func TestSabrinaCostMissingExtras(t *testing.T) {
-	if c := sabrinaCost(Brick{ID: "x", Extras: json.RawMessage(`{}`)}); c != 0 {
-		t.Fatalf("missing SabrinaCost should read 0, got %d", c)
+func TestValidatePhraseCredit(t *testing.T) {
+	// cost 5 optional uncovered -> invalid
+	got := validate([]string{"bfpa01", "bfoa01"}, rootFight, optA)
+	if got.Valid || !strings.Contains(got.Errors[0], "cost 5 exceeds credit") {
+		t.Fatalf("uncovered cost should fail: %+v", got)
 	}
-	if c := sabrinaCost(Brick{ID: "x"}); c != 0 {
-		t.Fatalf("nil extras should read 0, got %d", c)
+	// -6 credit covers it
+	got = validate([]string{"bfpa01", "bfoa01", "bfca01"}, rootFight, optA, credit6)
+	if !got.Valid {
+		t.Fatalf("credit-covered phrase should pass: %v", got.Errors)
+	}
+	// 5 + 8 = 13 > 6 -> invalid again, remaining cost 7
+	optC := mkBrick("bfob02", "Optional", "BFOB", 8, nil)
+	got = validate([]string{"bfpa01", "bfoa01", "bfob02", "bfca01"}, rootFight, optA, optC, credit6)
+	if got.Valid || !strings.Contains(strings.Join(got.Errors, " "), "cost 7 exceeds") {
+		t.Fatalf("overdrawn credit should fail with remaining 7: %+v", got)
+	}
+}
+
+func TestParseExtrasTolerant(t *testing.T) {
+	if e := parseExtras(Brick{ID: "x"}); e.Basics.FamilyId != "" || e.sabrinaCost() != 0 {
+		t.Fatalf("nil extras should be zero value: %+v", e)
+	}
+	if e := parseExtras(Brick{ID: "x", Extras: json.RawMessage(`{"Basics":{"SabrinaCost":"oops"}}`)}); e.sabrinaCost() != 0 {
+		t.Fatal("non-numeric SabrinaCost should read 0")
 	}
 }
