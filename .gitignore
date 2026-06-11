@@ -1,9 +1,10 @@
-# Build artifacts for go-services (Phase 1+)
-logger
-nats-bridge
-sheet-api
-gm-api
-proxy
+# Build artifacts for go-services (Phase 1+) — anchored to repo root so they
+# do not swallow cmd/<service>/ source directories
+/logger
+/nats-bridge
+/sheet-api
+/gm-api
+/proxy
 bin/
 *.test
 *.out
