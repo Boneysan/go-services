@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,11 +12,27 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/boneysan/ryzom/go-services/internal/natspub"
 )
 
 type server struct {
 	db    *pgxpool.Pool
+	nats  natspub.Publisher
 	start time.Time
+}
+
+// publishSheetUpdated emits the Task 4.2b invalidation event after a sheet
+// row changes. Subject is sheet.updated.<id> — the plan writes
+// "sheet.updated:<sheet_id>", but NATS wildcards only match whole
+// dot-separated tokens, so the id must be its own token for the EGS to
+// subscribe to sheet.updated.*. Failures are logged, not returned: the DB
+// write already committed, and the EGS full-reloads on NATS reconnect.
+func (s *server) publishSheetUpdated(table, id string) {
+	payload, _ := json.Marshal(map[string]string{"table": table, "sheet_id": id})
+	if err := s.nats.Publish("sheet.updated."+id, payload); err != nil {
+		slog.Warn("sheet.updated publish failed", "sheet_id", id, "err", err)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -160,6 +177,7 @@ func (s *server) patchItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	s.publishSheetUpdated("items", id)
 	writeJSON(w, http.StatusOK, item)
 }
 

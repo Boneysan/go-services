@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/boneysan/ryzom/go-services/internal/config"
+	"github.com/boneysan/ryzom/go-services/internal/natspub"
 )
 
 func main() {
@@ -42,7 +43,21 @@ func main() {
 	}
 	defer pool.Close()
 
-	srv := &server{db: pool, start: time.Now()}
+	// NATS carries sheet.updated invalidations (Task 4.2b). NATS_URL=disabled
+	// turns publishing off; an unreachable broker is tolerated (buffered
+	// reconnect) so live-balance editing still works without it.
+	var pub natspub.Publisher = natspub.Noop{}
+	if natsURL := config.Env("NATS_URL", "nats://localhost:4222"); natsURL != "disabled" {
+		nc, err := natspub.Connect(natsURL, "sheet-api")
+		if err != nil {
+			slog.Warn("sheet-api: NATS unavailable, invalidations disabled", "err", err)
+		} else {
+			defer nc.Close()
+			pub = nc
+		}
+	}
+
+	srv := &server{db: pool, nats: pub, start: time.Now()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /sheets/items", srv.listItems)
