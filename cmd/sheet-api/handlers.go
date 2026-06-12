@@ -259,6 +259,59 @@ func (s *server) listBricks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"bricks": bricks, "total": total, "page": page})
 }
 
+var brickPatchable = map[string]bool{
+	"family": true, "brick_type": true, "skill_req": true, "skill_min": true,
+	"sap_cost": true, "hp_cost": true, "sta_cost": true, "extras": true,
+}
+
+func (s *server) patchBrick(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var patch map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if len(patch) == 0 {
+		writeErr(w, http.StatusBadRequest, "empty_patch", "no fields to update")
+		return
+	}
+	var sets []string
+	args := []any{id}
+	for k, v := range patch {
+		if !brickPatchable[k] {
+			writeErr(w, http.StatusBadRequest, "bad_field", "field not patchable: "+k)
+			return
+		}
+		if k == "extras" {
+			b, err := json.Marshal(v)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+				return
+			}
+			v = string(b)
+		}
+		args = append(args, v)
+		sets = append(sets, fmt.Sprintf("%s = $%d", k, len(args)))
+	}
+	tag, err := s.db.Exec(r.Context(),
+		"UPDATE bricks SET "+strings.Join(sets, ", ")+" WHERE id = $1", args...)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "update_failed", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeErr(w, http.StatusNotFound, "not_found", "no such brick")
+		return
+	}
+	brick, err := s.fetchBrick(r, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	s.publishSheetUpdated("bricks", id)
+	writeJSON(w, http.StatusOK, brick)
+}
+
 func (s *server) listSkills(w http.ResponseWriter, r *http.Request) {
 	where, args := filterClause(r, map[string]string{"branch": "branch"})
 	rows, err := s.db.Query(r.Context(),

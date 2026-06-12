@@ -102,3 +102,11 @@ func (s *server) fetchBricks(r *http.Request, ids []string) ([]Brick, error) {
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByName[Brick])
 }
+
+func (s *server) fetchBrick(r *http.Request, id string) (Brick, error) {
+	rows, err := s.db.Query(r.Context(), brickSelect+" WHERE id = $1", id)
+	if err != nil {
+		return Brick{}, err
+	}
+	return pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Brick])
+}

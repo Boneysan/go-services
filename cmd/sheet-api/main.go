@@ -66,6 +66,7 @@ func main() {
 	mux.HandleFunc("GET /sheets/creatures", srv.listCreatures)
 	mux.HandleFunc("GET /sheets/creatures/{id}", srv.getCreature)
 	mux.HandleFunc("GET /sheets/bricks", srv.listBricks)
+	mux.HandleFunc("PATCH /sheets/bricks/{id}", srv.patchBrick)
 	mux.HandleFunc("GET /sheets/skills", srv.listSkills)
 	mux.HandleFunc("POST /phrase/validate", srv.validatePhrase)
 	mux.HandleFunc("GET /health", srv.health)
