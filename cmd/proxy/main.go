@@ -9,13 +9,19 @@
 package main
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/boneysan/ryzom/go-services/internal/config"
 	"github.com/boneysan/ryzom/go-services/internal/health"
+	"github.com/boneysan/ryzom/go-services/internal/natspub"
 )
+
+type server struct {
+	nats natspub.Publisher
+}
 
 func main() {
 	addr := config.Env("PROXY_ADDR", ":47852")
@@ -25,7 +31,19 @@ func main() {
 
 	_ = frontendHost
 	_ = frontendPort
-	_ = natsURL
+
+	var pub natspub.Publisher = natspub.Noop{}
+	if natsURL != "disabled" {
+		nc, err := natspub.Connect(natsURL, "proxy")
+		if err != nil {
+			slog.Warn("proxy: NATS unavailable, admin reload disabled", "err", err)
+		} else {
+			defer nc.Close()
+			pub = nc
+		}
+	}
+
+	srv := &server{nats: pub}
 
 	mux := http.NewServeMux()
 
@@ -34,6 +52,7 @@ func main() {
 		http.Error(w, "proxy not yet implemented", http.StatusNotImplemented)
 	})
 
+	mux.HandleFunc("POST /admin/reload-sheets", srv.reloadSheets)
 	mux.HandleFunc("GET /health", health.Handler(nil))
 
 	slog.Info("proxy starting", "addr", addr)
@@ -41,4 +60,26 @@ func main() {
 		slog.Error("proxy exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+func (s *server) reloadSheets(w http.ResponseWriter, r *http.Request) {
+	const subject = "sheet.updated.all"
+	payload, _ := json.Marshal(map[string]string{"table": "bricks", "sheet_id": "*"})
+	if err := s.nats.Publish(subject, payload); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error(), "code": "nats_error"})
+		return
+	}
+	slog.Info("sheet reload requested", "subject", subject)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"queued":   true,
+		"subject":  subject,
+		"table":    "bricks",
+		"sheet_id": "*",
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
 }
