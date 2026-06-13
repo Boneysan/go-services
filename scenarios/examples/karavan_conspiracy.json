@@ -1,0 +1,80 @@
+{
+  "schema": "scenario-graph/v1",
+  "id": "karavan_conspiracy",
+  "name": "The Karavan Conspiracy",
+  "start_quest": "missing_caravan",
+  "quests": [
+    {
+      "id": "missing_caravan",
+      "name": "The Missing Caravan",
+      "start": { "on": "enter_zone", "zone": "fyros_start" },
+      "objectives": [
+        {
+          "id": "talk_dexton",
+          "text": "Talk to Merchant Dexton",
+          "trigger": { "on": "talk", "npc": "merchant_dexton" }
+        },
+        {
+          "id": "find_wreck",
+          "text": "Find the caravan wreck",
+          "trigger": { "on": "reach", "x": 1000, "y": 2000, "radius": 20 },
+          "consequences": [
+            { "action": "spawn", "creature": "bandit", "count": 3 },
+            { "action": "message", "text": "Bandits ambush you from the dunes!" }
+          ]
+        },
+        {
+          "id": "defeat_bandits",
+          "text": "Defeat the bandits",
+          "trigger": { "on": "kill", "creature": "bandit", "count": 3 },
+          "consequences": [
+            { "action": "give_item", "item": "bloodstained_letter", "count": 1 }
+          ]
+        },
+        {
+          "id": "return_letter",
+          "text": "Return the letter to Dexton",
+          "trigger": { "on": "talk", "npc": "merchant_dexton" },
+          "choice": {
+            "prompt": "What do you tell Dexton?",
+            "mode": "group_vote",
+            "options": [
+              { "id": "side_dexton", "text": "Tell him the truth", "next_quest": "side_dexton" },
+              { "id": "side_bandits", "text": "Cover for the bandits", "next_quest": "side_bandits" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "side_dexton",
+      "name": "Dexton's Gratitude",
+      "objectives": [
+        {
+          "id": "accept_reward",
+          "text": "Accept Dexton's reward",
+          "trigger": { "on": "talk", "npc": "merchant_dexton" },
+          "consequences": [
+            { "action": "xp", "amount": 500 },
+            { "action": "faction", "faction": "fyros", "amount": 1000 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "side_bandits",
+      "name": "The Bandits' Pact",
+      "objectives": [
+        {
+          "id": "meet_bandit_chief",
+          "text": "Meet the bandit chief at the oasis",
+          "trigger": { "on": "reach", "x": 1500, "y": 2400, "radius": 25 },
+          "consequences": [
+            { "action": "faction", "faction": "fyros", "amount": -800 },
+            { "action": "give_item", "item": "bandit_token", "count": 1 }
+          ]
+        }
+      ]
+    }
+  ]
+}

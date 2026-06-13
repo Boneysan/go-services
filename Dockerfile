@@ -9,7 +9,7 @@ RUN go mod download
 
 COPY . .
 RUN mkdir -p /out \
- && for svc in logger nats-bridge sheet-api gm-api proxy; do \
+ && for svc in logger nats-bridge sheet-api gm-api campaign-api quest-compiler proxy; do \
       echo "building $svc"; \
       go build -o /out/$svc ./cmd/$svc/; \
     done
