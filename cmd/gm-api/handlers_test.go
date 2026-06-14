@@ -120,6 +120,51 @@ func TestEntityPatchAndDespawn(t *testing.T) {
 	}
 }
 
+func TestPartyManagementAndTeleport(t *testing.T) {
+	srv, pub := newTestServer("")
+
+	// join_party — requires char_id + party_id
+	if w := do(t, srv.joinParty, "POST", "/gm/party/join", `{"char_id":"c1"}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing party_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.joinParty, "POST", "/gm/party/join", `{"char_id":"c1","party_id":"p1"}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("join_party: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.join_party" {
+		t.Fatalf("join_party subject = %q, want gm.join_party", pub.subject)
+	}
+
+	// leave_party — requires char_id
+	if w := do(t, srv.leaveParty, "POST", "/gm/party/leave", `{}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing char_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.leaveParty, "POST", "/gm/party/leave", `{"char_id":"c1"}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("leave_party: got %d, want 202: %s", w.Code, w.Body)
+	}
+
+	// set_anchor — requires party_id
+	if w := do(t, srv.setAnchor, "POST", "/gm/party/anchor", `{"x":100,"y":200}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing party_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.setAnchor, "POST", "/gm/party/anchor", `{"party_id":"p1","x":100,"y":200,"z":5}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("set_anchor: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.set_anchor" {
+		t.Fatalf("set_anchor subject = %q, want gm.set_anchor", pub.subject)
+	}
+
+	// gmTeleport — requires char_id
+	if w := do(t, srv.gmTeleport, "POST", "/gm/teleport", `{"x":10,"y":20}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing char_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.gmTeleport, "POST", "/gm/teleport", `{"char_id":"c1","x":10,"y":20,"z":3}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("teleport: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.teleport" {
+		t.Fatalf("teleport subject = %q, want gm.teleport", pub.subject)
+	}
+}
+
 func TestWeatherAndEventAndScript(t *testing.T) {
 	srv, pub := newTestServer("")
 

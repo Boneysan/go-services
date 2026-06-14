@@ -220,3 +220,78 @@ func (s *server) awardSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish(w, "gm.award.skill", "award_skill", req)
 }
+
+// --- GM teleport ------------------------------------------------------------
+
+type gmTeleportReq struct {
+	CharID string  `json:"char_id"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Z      float64 `json:"z"`
+}
+
+func (s *server) gmTeleport(w http.ResponseWriter, r *http.Request) {
+	var req gmTeleportReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.CharID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "char_id is required")
+		return
+	}
+	s.publish(w, "gm.teleport", "teleport", req)
+}
+
+// --- party management -------------------------------------------------------
+
+type joinPartyReq struct {
+	CharID  string `json:"char_id"`
+	PartyID string `json:"party_id"`
+}
+
+func (s *server) joinParty(w http.ResponseWriter, r *http.Request) {
+	var req joinPartyReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.CharID == "" || req.PartyID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "char_id and party_id are required")
+		return
+	}
+	s.publish(w, "gm.join_party", "join_party", req)
+}
+
+type leavePartyReq struct {
+	CharID string `json:"char_id"`
+}
+
+func (s *server) leaveParty(w http.ResponseWriter, r *http.Request) {
+	var req leavePartyReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.CharID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "char_id is required")
+		return
+	}
+	s.publish(w, "gm.leave_party", "leave_party", req)
+}
+
+type setAnchorReq struct {
+	PartyID string  `json:"party_id"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Z       float64 `json:"z"`
+}
+
+func (s *server) setAnchor(w http.ResponseWriter, r *http.Request) {
+	var req setAnchorReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.PartyID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "party_id is required")
+		return
+	}
+	s.publish(w, "gm.set_anchor", "set_anchor", req)
+}

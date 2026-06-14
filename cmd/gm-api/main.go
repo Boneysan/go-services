@@ -68,13 +68,18 @@ func main() {
 	initRedis(config.Env("REDIS_ADDR", "localhost:6379"))
 
 	// Phase 5.1 dashboard endpoints — not part of Task 4.5.
-	mux.HandleFunc("POST /gm/teleport", srv.auth(notImplemented))
+	mux.HandleFunc("POST /gm/teleport", srv.auth(srv.gmTeleport))
 	mux.HandleFunc("GET /gm/zones/{zone_id}/entities", srv.auth(notImplemented))
 	mux.HandleFunc("POST /gm/scenario/start", srv.auth(srv.scenarioStart))
 	mux.HandleFunc("POST /gm/scenario/stop", srv.auth(notImplemented))
 	mux.HandleFunc("POST /gm/scenario/import", srv.auth(srv.scenarioImport))
 	mux.HandleFunc("POST /gm/fire_event", srv.auth(srv.fireEvent))
 	mux.HandleFunc("POST /gm/award/skill", srv.auth(srv.awardSkill))
+
+	// Phase 5.8 party management — assigns characters to parties and sets respawn anchors.
+	mux.HandleFunc("POST /gm/party/join", srv.auth(srv.joinParty))
+	mux.HandleFunc("POST /gm/party/leave", srv.auth(srv.leaveParty))
+	mux.HandleFunc("POST /gm/party/anchor", srv.auth(srv.setAnchor))
 
 	mux.HandleFunc("GET /health", srv.health)
 
