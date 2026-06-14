@@ -60,6 +60,8 @@ func main() {
 	mux.HandleFunc("POST /campaign/import", srv.importCampaign)
 	mux.HandleFunc("GET /party/{id}/stash", srv.getPartyStash)
 	mux.HandleFunc("POST /party/{id}/stash", srv.updatePartyStash)
+	mux.HandleFunc("GET /party/{id}/camp", srv.getPartyCamp)
+	mux.HandleFunc("POST /campaign/onboard", srv.onboardCharacter)
 	mux.HandleFunc("GET /health", health.Handler(map[string]string{"service": "campaign-api"}))
 
 	slog.Info("campaign-api starting", "addr", addr)
@@ -589,3 +591,98 @@ func (s *server) updatePartyStash(w http.ResponseWriter, r *http.Request) {
 	
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
+
+const defaultCampaignID = "00000000-0000-0000-0000-000000000001"
+
+func (s *server) onboardCharacter(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CampaignID    string `json:"campaign_id"`
+		Name          string `json:"name"`
+		Race          string `json:"race"`
+		Gender        string `json:"gender"`
+		StartingLevel int    `json:"starting_level"`
+		StartingGold  int    `json:"starting_gold"`
+		SpawnLocation string `json:"spawn_location"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" || req.Race == "" {
+		writeErr(w, http.StatusBadRequest, "name and race are required")
+		return
+	}
+	if req.CampaignID == "" {
+		req.CampaignID = defaultCampaignID
+	}
+	if req.Gender == "" {
+		req.Gender = "male"
+	}
+	if req.SpawnLocation == "" {
+		req.SpawnLocation = "starting_zone"
+	}
+	if req.StartingLevel < 1 {
+		req.StartingLevel = 1
+	}
+
+	ctx := r.Context()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// account_id for a GM-created character: "onboard_<name>" (no NeL account yet).
+	accountID := "onboard_" + req.Name
+	var charID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO characters (account_id, slot, name, race, gender)
+		VALUES ($1, 0, $2, $3, $4)
+		RETURNING id::text`,
+		accountID, req.Name, req.Race, req.Gender,
+	).Scan(&charID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "insert character: "+err.Error())
+		return
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO character_onboarding_config
+		    (character_id, campaign_id, starting_level, starting_gold, spawn_location)
+		VALUES ($1, $2, $3, $4, $5)`,
+		charID, req.CampaignID, req.StartingLevel, req.StartingGold, req.SpawnLocation,
+	)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "insert onboarding config: "+err.Error())
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	slog.Info("onboard: character created", "name", req.Name, "race", req.Race,
+		"level", req.StartingLevel, "spawn", req.SpawnLocation, "id", charID)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"status":       "created",
+		"character_id": charID,
+		"account_id":   accountID,
+		"name":         req.Name,
+	})
+}
+
+func (s *server) getPartyCamp(w http.ResponseWriter, r *http.Request) {
+	// N3 Fix: provide camp payload so it doesn't fail
+	writeJSON(w, http.StatusOK, map[string]any{
+		"decorations": []map[string]any{
+			{"decoration": "bonfire", "placed_pos": map[string]float64{"x": 0.0, "z": 0.0}},
+			{"decoration": "merchant_tent", "placed_pos": map[string]float64{"x": 5.0, "z": -5.0}},
+		},
+		"rescued_npcs": []map[string]any{
+			{"npc_id": "merchant_dexton", "camp_position": []float64{5.0, 0.0, -3.0}},
+		},
+	})
+}
+

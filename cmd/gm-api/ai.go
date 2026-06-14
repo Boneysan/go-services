@@ -15,7 +15,7 @@ import (
 // geminiHTTP bounds every Gemini call so a slow/hung request can't pin a goroutine.
 var geminiHTTP = &http.Client{Timeout: 60 * time.Second}
 
-func geminiURL(model, key string) string {
+var geminiURL = func(model, key string) string {
 	if model == "" {
 		model = "gemini-1.5-flash"
 	}
@@ -39,6 +39,9 @@ func buildGeminiRequest(userText, systemText string) geminiRequest {
 	}{Parts: []struct {
 		Text string `json:"text"`
 	}{{Text: systemText}}}
+	gReq.GenerationConfig = &struct {
+		ResponseMimeType string `json:"responseMimeType,omitempty"`
+	}{ResponseMimeType: "application/json"}
 	return gReq
 }
 
@@ -66,6 +69,9 @@ type geminiRequest struct {
 			Text string `json:"text"`
 		} `json:"parts"`
 	} `json:"system_instruction,omitempty"`
+	GenerationConfig *struct {
+		ResponseMimeType string `json:"responseMimeType,omitempty"`
+	} `json:"generationConfig,omitempty"`
 }
 
 type geminiResponse struct {

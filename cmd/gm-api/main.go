@@ -70,8 +70,10 @@ func main() {
 	// Phase 5.1 dashboard endpoints — not part of Task 4.5.
 	mux.HandleFunc("POST /gm/teleport", srv.auth(notImplemented))
 	mux.HandleFunc("GET /gm/zones/{zone_id}/entities", srv.auth(notImplemented))
-	mux.HandleFunc("POST /gm/scenario/start", srv.auth(notImplemented))
+	mux.HandleFunc("POST /gm/scenario/start", srv.auth(srv.scenarioStart))
 	mux.HandleFunc("POST /gm/scenario/stop", srv.auth(notImplemented))
+	mux.HandleFunc("POST /gm/scenario/import", srv.auth(srv.scenarioImport))
+	mux.HandleFunc("POST /gm/fire_event", srv.auth(srv.fireEvent))
 	mux.HandleFunc("POST /gm/award/skill", srv.auth(srv.awardSkill))
 
 	mux.HandleFunc("GET /health", srv.health)

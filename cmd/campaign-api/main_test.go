@@ -2,9 +2,35 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// TestOnboardValidation checks that onboardCharacter returns 400 on a missing
+// required field without needing a real database connection.
+func TestOnboardValidation(t *testing.T) {
+	srv := &server{} // nil db — only request validation is exercised
+	cases := []struct {
+		body string
+		want int
+	}{
+		{`{}`, http.StatusBadRequest},
+		{`{"name":"","race":"matis"}`, http.StatusBadRequest},
+		{`{"name":"Arion","race":""}`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/campaign/onboard",
+			strings.NewReader(c.body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		srv.onboardCharacter(rr, req)
+		if rr.Code != c.want {
+			t.Errorf("body=%s: status=%d, want %d", c.body, rr.Code, c.want)
+		}
+	}
+}
 
 // TestNewBundleMarshalsEmptyCollections guards the v1 wire shape: the reserved
 // Phase 5.8/5.3a sections must serialise as [] / {} (never null) so consumers
