@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"bytes"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -74,7 +74,7 @@ func (s *server) generateDungeon(w http.ResponseWriter, r *http.Request) {
 	rooms := generateLayout(req.Size)
 
 	// Call Gemini for descriptions
-	llmRooms, err := seedDescriptionsWithLLM(s.geminiKey, req.Theme, rooms)
+	llmRooms, err := seedDescriptionsWithLLM(s.geminiKey, s.geminiModel, req.Theme, rooms)
 	if err != nil {
 		// Fallback to simple descriptions
 		llmRooms = rooms
@@ -101,7 +101,7 @@ func generateLayout(size int) []DungeonRoom {
 	}
 
 	var rooms []DungeonRoom
-	
+
 	startX, startY := size/2, size/2
 	grid[startX][startY] = "Start"
 
@@ -118,7 +118,7 @@ func generateLayout(size int) []DungeonRoom {
 		queue = queue[1:]
 
 		x, y := curr[0], curr[1]
-		
+
 		for _, d := range dirs {
 			nx, ny := x+d[0], y+d[1]
 			if nx >= 0 && nx < size && ny >= 0 && ny < size {
@@ -181,7 +181,7 @@ func abs(x int) int {
 	return x
 }
 
-func seedDescriptionsWithLLM(geminiKey, theme string, rooms []DungeonRoom) ([]DungeonRoom, error) {
+func seedDescriptionsWithLLM(geminiKey, model, theme string, rooms []DungeonRoom) ([]DungeonRoom, error) {
 	if geminiKey == "" {
 		return nil, fmt.Errorf("no gemini key")
 	}
@@ -208,7 +208,7 @@ func seedDescriptionsWithLLM(geminiKey, theme string, rooms []DungeonRoom) ([]Du
 			Text string `json:"text"`
 		}{{Text: userPrompt}},
 	})
-	
+
 	gReq.SystemInstruction = &struct {
 		Parts []struct {
 			Text string `json:"text"`
@@ -220,9 +220,9 @@ func seedDescriptionsWithLLM(geminiKey, theme string, rooms []DungeonRoom) ([]Du
 	}
 
 	body, _ := json.Marshal(gReq)
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiKey
+	url := geminiURL(model, geminiKey)
 
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := geminiHTTP.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

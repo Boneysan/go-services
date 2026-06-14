@@ -38,6 +38,7 @@ func main() {
 	}
 
 	geminiKey := config.Env("GEMINI_API_KEY", "")
+	geminiModel := config.Env("GEMINI_MODEL", "gemini-1.5-flash")
 
 	nc, err := natspub.Connect(natsURL, "gm-api")
 	if err != nil {
@@ -46,7 +47,7 @@ func main() {
 	}
 	defer nc.Close()
 
-	srv := &server{nats: nc, token: token, geminiKey: geminiKey, start: time.Now()}
+	srv := &server{nats: nc, token: token, geminiKey: geminiKey, geminiModel: geminiModel, start: time.Now()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /gm/spawn", srv.auth(srv.spawn))
@@ -57,7 +58,7 @@ func main() {
 	mux.HandleFunc("POST /gm/script/run", srv.auth(srv.scriptRun))
 	mux.HandleFunc("POST /gm/quest/generate", srv.auth(srv.generateQuest))
 	mux.HandleFunc("POST /gm/dungeon/generate", srv.auth(srv.generateDungeon))
-	
+
 	mux.HandleFunc("POST /gm/tabletop/dice", srv.auth(srv.rollDice))
 	mux.HandleFunc("POST /gm/tabletop/fow", srv.auth(srv.toggleFOW))
 	mux.HandleFunc("POST /gm/tabletop/npc", srv.auth(srv.npcCommand))

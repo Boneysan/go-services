@@ -13,10 +13,11 @@ import (
 )
 
 type server struct {
-	nats      natspub.Publisher
-	token     string
-	geminiKey string
-	start     time.Time
+	nats        natspub.Publisher
+	token       string
+	geminiKey   string
+	geminiModel string
+	start       time.Time
 }
 
 // envelope is the wire format for every gm.* subject. The EGS subscriber

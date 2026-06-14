@@ -4,11 +4,23 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/boneysan/ryzom/go-services/internal/questc"
 )
+
+// geminiHTTP bounds every Gemini call so a slow/hung request can't pin a goroutine.
+var geminiHTTP = &http.Client{Timeout: 60 * time.Second}
+
+func geminiURL(model, key string) string {
+	if model == "" {
+		model = "gemini-1.5-flash"
+	}
+	return "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + key
+}
 
 type generateQuestReq struct {
 	Prompt string `json:"prompt"`
@@ -102,7 +114,7 @@ Ensure all 'next_quest' references match valid quest IDs in the JSON. Output onl
 			Text string `json:"text"`
 		}{{Text: req.Prompt}},
 	})
-	
+
 	gReq.SystemInstruction = &struct {
 		Parts []struct {
 			Text string `json:"text"`
@@ -114,9 +126,9 @@ Ensure all 'next_quest' references match valid quest IDs in the JSON. Output onl
 	}
 
 	body, _ := json.Marshal(gReq)
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + s.geminiKey
+	url := geminiURL(s.geminiModel, s.geminiKey)
 
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := geminiHTTP.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "ai_error", err.Error())
 		return
@@ -124,7 +136,8 @@ Ensure all 'next_quest' references match valid quest IDs in the JSON. Output onl
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		writeErr(w, http.StatusInternalServerError, "ai_error", fmt.Sprintf("Gemini API returned status %d", resp.StatusCode))
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		writeErr(w, http.StatusInternalServerError, "ai_error", fmt.Sprintf("Gemini API returned status %d: %s", resp.StatusCode, string(errBody)))
 		return
 	}
 
@@ -140,7 +153,7 @@ Ensure all 'next_quest' references match valid quest IDs in the JSON. Output onl
 	}
 
 	generatedText := gResp.Candidates[0].Content.Parts[0].Text
-	
+
 	// Clean up markdown if the LLM ignored instructions
 	generatedText = strings.TrimSpace(generatedText)
 	if strings.HasPrefix(generatedText, "```json") {
@@ -154,12 +167,12 @@ Ensure all 'next_quest' references match valid quest IDs in the JSON. Output onl
 
 	var storyline questc.Storyline
 	if err := json.Unmarshal([]byte(generatedText), &storyline); err != nil {
-		writeErr(w, http.StatusInternalServerError, "ai_error", "LLM output invalid JSON: " + err.Error())
+		writeErr(w, http.StatusInternalServerError, "ai_error", "LLM output invalid JSON: "+err.Error())
 		return
 	}
 
 	if err := storyline.Validate(); err != nil {
-		writeErr(w, http.StatusInternalServerError, "ai_error", "LLM output invalid scenario graph: " + err.Error())
+		writeErr(w, http.StatusInternalServerError, "ai_error", "LLM output invalid scenario graph: "+err.Error())
 		return
 	}
 

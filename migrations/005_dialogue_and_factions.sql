@@ -15,4 +15,4 @@ CREATE TABLE IF NOT EXISTS chronicle_choices (
     decided_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_chronicle_storyline ON chronicle_choices(storyline, quest);
+CREATE INDEX IF NOT EXISTS idx_chronicle_storyline ON chronicle_choices(storyline, quest);

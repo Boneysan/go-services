@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -32,11 +33,16 @@ type DialogueResponse struct {
 	Subtitle string `json:"subtitle"`
 }
 
-var dialogueCache = make(map[string]DialogueResponse)
+var (
+	dialogueCache = make(map[string]DialogueResponse)
+	dialogueMu    sync.RWMutex
+)
 
-func buildContextHash(ctx NPCContext) string {
+// buildContextHash keys the cache on the NPC context AND the player's input —
+// different player utterances to the same NPC must not collide.
+func buildContextHash(ctx NPCContext, playerText string) string {
 	hasher := sha256.New()
-	hasher.Write([]byte(fmt.Sprintf("%s|%s|%s|%d", ctx.NPCIdentity, ctx.NPCLocation, ctx.QuestState, ctx.PlayerRep)))
+	hasher.Write([]byte(fmt.Sprintf("%s|%s|%s|%d|%s", ctx.NPCIdentity, ctx.NPCLocation, ctx.QuestState, ctx.PlayerRep, playerText)))
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
@@ -58,8 +64,11 @@ func handleDialogueRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash := buildContextHash(req.Context)
-	if cachedRes, ok := dialogueCache[hash]; ok {
+	hash := buildContextHash(req.Context, req.PlayerText)
+	dialogueMu.RLock()
+	cachedRes, ok := dialogueCache[hash]
+	dialogueMu.RUnlock()
+	if ok {
 		slog.Info("LLM Cache hit", "hash", hash)
 		json.NewEncoder(w).Encode(cachedRes)
 		return
@@ -71,7 +80,9 @@ func handleDialogueRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dialogueMu.Lock()
 	dialogueCache[hash] = res
+	dialogueMu.Unlock()
 	json.NewEncoder(w).Encode(res)
 }
 
@@ -87,11 +98,15 @@ func main() {
 	nc.Subscribe("ai.dialogue.request", func(m *nats.Msg) {
 		var req DialogueRequest
 		if err := json.Unmarshal(m.Data, &req); err == nil {
-			hash := buildContextHash(req.Context)
+			hash := buildContextHash(req.Context, req.PlayerText)
+			dialogueMu.RLock()
 			res, ok := dialogueCache[hash]
+			dialogueMu.RUnlock()
 			if !ok {
 				res, _ = callClaudeHaiku(req.Context, req.PlayerText)
+				dialogueMu.Lock()
 				dialogueCache[hash] = res
+				dialogueMu.Unlock()
 			}
 			resData, _ := json.Marshal(res)
 			m.Respond(resData)

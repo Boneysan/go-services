@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	"time"
 )
 
 type diceReq struct {
@@ -31,8 +30,9 @@ func (s *server) rollDice(w http.ResponseWriter, r *http.Request) {
 
 	resultStr := parseAndRoll(req.Formula)
 
-	// In a real scenario, we might broadcast this to the game via NATS
-	// s.nats.Publish("gm.tabletop.dice", resultPayload)
+	// Broadcast the roll to the shard so it can surface in-game.
+	payload, _ := json.Marshal(map[string]string{"formula": req.Formula, "result": resultStr})
+	s.nats.Publish("gm.tabletop.dice", payload)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"result": resultStr})
@@ -72,7 +72,7 @@ func parseAndRoll(formula string) string {
 	re := regexp.MustCompile(`(?i)(\d+)d(\d+)(?:\s*\+\s*(\d+))?`)
 	matches := re.FindStringSubmatch(formula)
 	if len(matches) < 3 {
-		return fmt.Sprintf("Rolled %s: %d", formula, rand.Intn(20)+1)
+		return fmt.Sprintf("Invalid dice formula %q", formula)
 	}
 
 	count, _ := strconv.Atoi(matches[1])
@@ -82,11 +82,18 @@ func parseAndRoll(formula string) string {
 		bonus, _ = strconv.Atoi(matches[3])
 	}
 
-	if count > 100 { count = 100 }
-	if sides > 1000 { sides = 1000 }
+	if count > 100 {
+		count = 100
+	}
+	if sides > 1000 {
+		sides = 1000
+	}
+	// Guard against rand.Intn(0) panic ("1d0") and nonsense counts.
+	if count <= 0 || sides <= 0 {
+		return fmt.Sprintf("Invalid dice formula %q", formula)
+	}
 
 	total := 0
-	rand.Seed(time.Now().UnixNano())
 	for i := 0; i < count; i++ {
 		total += rand.Intn(sides) + 1
 	}
