@@ -79,12 +79,16 @@ type Choice struct {
 	Prompt  string         `json:"prompt"`
 	Mode    string         `json:"mode"` // initiator|group_vote|lead|secret
 	Options []ChoiceOption `json:"options"`
+	// Optional authored dialogue (AI-generated at authoring time, GM-editable):
+	NPC     string `json:"npc,omitempty"`      // who speaks (NPC name/sheet)
+	NPCLine string `json:"npc_line,omitempty"` // the NPC's spoken line leading into the choice
 }
 
 type ChoiceOption struct {
 	ID        string `json:"id"`
 	Text      string `json:"text"`
 	NextQuest string `json:"next_quest,omitempty"` // "" = ends the storyline branch
+	Response  string `json:"response,omitempty"`   // optional NPC reaction line to this option
 }
 
 // Validate checks structural integrity and cross-references so the compiled Lua

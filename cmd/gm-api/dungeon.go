@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -198,26 +197,7 @@ func seedDescriptionsWithLLM(geminiKey, model, theme string, rooms []DungeonRoom
 
 	userPrompt := fmt.Sprintf("Theme: %s\nLayout: %s", theme, string(layoutJSON))
 
-	gReq := geminiRequest{}
-	gReq.Contents = append(gReq.Contents, struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	}{
-		Parts: []struct {
-			Text string `json:"text"`
-		}{{Text: userPrompt}},
-	})
-
-	gReq.SystemInstruction = &struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	}{
-		Parts: []struct {
-			Text string `json:"text"`
-		}{{Text: systemPrompt}},
-	}
+	gReq := buildGeminiRequest(userPrompt, systemPrompt)
 
 	body, _ := json.Marshal(gReq)
 	url := geminiURL(model, geminiKey)
@@ -241,11 +221,7 @@ func seedDescriptionsWithLLM(geminiKey, model, theme string, rooms []DungeonRoom
 		return nil, fmt.Errorf("empty response")
 	}
 
-	text := strings.TrimSpace(gResp.Candidates[0].Content.Parts[0].Text)
-	text = strings.TrimPrefix(text, "```json")
-	text = strings.TrimPrefix(text, "```")
-	text = strings.TrimSuffix(text, "```")
-	text = strings.TrimSpace(text)
+	text := stripJSONFences(gResp.Candidates[0].Content.Parts[0].Text)
 
 	var descs []RoomDesc
 	if err := json.Unmarshal([]byte(text), &descs); err != nil {

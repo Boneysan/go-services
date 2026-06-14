@@ -58,6 +58,7 @@ func main() {
 	mux.HandleFunc("POST /gm/script/run", srv.auth(srv.scriptRun))
 	mux.HandleFunc("POST /gm/quest/generate", srv.auth(srv.generateQuest))
 	mux.HandleFunc("POST /gm/dungeon/generate", srv.auth(srv.generateDungeon))
+	mux.HandleFunc("POST /gm/dialogue/generate", srv.auth(srv.generateDialogue))
 
 	mux.HandleFunc("POST /gm/tabletop/dice", srv.auth(srv.rollDice))
 	mux.HandleFunc("POST /gm/tabletop/fow", srv.auth(srv.toggleFOW))

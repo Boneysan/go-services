@@ -22,6 +22,35 @@ func geminiURL(model, key string) string {
 	return "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + key
 }
 
+// buildGeminiRequest assembles a single-turn request with a system instruction.
+func buildGeminiRequest(userText, systemText string) geminiRequest {
+	var gReq geminiRequest
+	gReq.Contents = append(gReq.Contents, struct {
+		Parts []struct {
+			Text string `json:"text"`
+		} `json:"parts"`
+	}{Parts: []struct {
+		Text string `json:"text"`
+	}{{Text: userText}}})
+	gReq.SystemInstruction = &struct {
+		Parts []struct {
+			Text string `json:"text"`
+		} `json:"parts"`
+	}{Parts: []struct {
+		Text string `json:"text"`
+	}{{Text: systemText}}}
+	return gReq
+}
+
+// stripJSONFences removes ```json / ``` fences an LLM may wrap around JSON output.
+func stripJSONFences(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	return strings.TrimSpace(s)
+}
+
 type generateQuestReq struct {
 	Prompt string `json:"prompt"`
 }
@@ -104,26 +133,7 @@ Available consequences: "spawn", "give_item", "xp", "faction", "world_flag", "me
 
 Ensure all 'next_quest' references match valid quest IDs in the JSON. Output only JSON.`
 
-	gReq := geminiRequest{}
-	gReq.Contents = append(gReq.Contents, struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	}{
-		Parts: []struct {
-			Text string `json:"text"`
-		}{{Text: req.Prompt}},
-	})
-
-	gReq.SystemInstruction = &struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	}{
-		Parts: []struct {
-			Text string `json:"text"`
-		}{{Text: systemPrompt}},
-	}
+	gReq := buildGeminiRequest(req.Prompt, systemPrompt)
 
 	body, _ := json.Marshal(gReq)
 	url := geminiURL(s.geminiModel, s.geminiKey)
@@ -152,18 +162,7 @@ Ensure all 'next_quest' references match valid quest IDs in the JSON. Output onl
 		return
 	}
 
-	generatedText := gResp.Candidates[0].Content.Parts[0].Text
-
-	// Clean up markdown if the LLM ignored instructions
-	generatedText = strings.TrimSpace(generatedText)
-	if strings.HasPrefix(generatedText, "```json") {
-		generatedText = strings.TrimPrefix(generatedText, "```json")
-		generatedText = strings.TrimSuffix(generatedText, "```")
-	} else if strings.HasPrefix(generatedText, "```") {
-		generatedText = strings.TrimPrefix(generatedText, "```")
-		generatedText = strings.TrimSuffix(generatedText, "```")
-	}
-	generatedText = strings.TrimSpace(generatedText)
+	generatedText := stripJSONFences(gResp.Candidates[0].Content.Parts[0].Text)
 
 	var storyline questc.Storyline
 	if err := json.Unmarshal([]byte(generatedText), &storyline); err != nil {

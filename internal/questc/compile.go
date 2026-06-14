@@ -75,6 +75,12 @@ func emitChoice(b *strings.Builder, c Choice) {
 	if c.Mode != "" {
 		fmt.Fprintf(b, "        mode = %s,\n", luaStr(c.Mode))
 	}
+	if c.NPC != "" {
+		fmt.Fprintf(b, "        npc = %s,\n", luaStr(c.NPC))
+	}
+	if c.NPCLine != "" {
+		fmt.Fprintf(b, "        npc_line = %s,\n", luaStr(c.NPCLine))
+	}
 	b.WriteString("        options = {\n")
 	for _, opt := range c.Options {
 		var parts []string
@@ -82,6 +88,9 @@ func emitChoice(b *strings.Builder, c Choice) {
 		parts = append(parts, "text = "+luaStr(opt.Text))
 		if opt.NextQuest != "" {
 			parts = append(parts, "next_quest = "+luaStr(opt.NextQuest))
+		}
+		if opt.Response != "" {
+			parts = append(parts, "response = "+luaStr(opt.Response))
 		}
 		fmt.Fprintf(b, "          { %s },\n", strings.Join(parts, ", "))
 	}
