@@ -29,11 +29,16 @@ SAVE_RE = re.compile(r"^account_(\d+)_(\d+)_pdr\.bin$")
 GENDER = {"0": "male", "1": "female", "2": "neutral"}
 
 
-def root_field(root, name):
-    """First root-level leaf value with the given token name, or None."""
-    for node in root:
+def find_field(nodes, name):
+    """First leaf value with the given token name, walking nested PDR nodes."""
+    for node in nodes:
         if node.get("n") == name and "v" in node:
             return node["v"]
+        children = node.get("c")
+        if isinstance(children, list):
+            value = find_field(children, name)
+            if value is not None:
+                return value
     return None
 
 
@@ -72,14 +77,14 @@ def collect_rows(args):
             continue
 
         root = doc.get("root", [])
-        name = root_field(root, "_Name")
+        name = find_field(root, "_Name")
         if not name:
             print(f"FAIL {path.name}: no _Name token (not a character save?)", file=sys.stderr)
             failures += 1
             continue
 
-        race = (root_field(root, "_Race") or "unknown").lower()
-        gender_raw = root_field(root, "_Gender")
+        race = (find_field(root, "_Race") or "unknown").lower()
+        gender_raw = find_field(root, "_Gender")
         gender = GENDER.get(gender_raw or "", None)
         if gender is None:
             print(f"warning: {path.name}: unexpected _Gender {gender_raw!r} -> 'neutral'", file=sys.stderr)

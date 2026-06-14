@@ -13,9 +13,10 @@ import (
 )
 
 type server struct {
-	nats  natspub.Publisher
-	token string
-	start time.Time
+	nats      natspub.Publisher
+	token     string
+	geminiKey string
+	start     time.Time
 }
 
 // envelope is the wire format for every gm.* subject. The EGS subscriber
@@ -195,4 +196,26 @@ func (s *server) scriptRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publish(w, "gm.script.run", "script_run", req)
+}
+
+type awardSkillReq struct {
+	CharacterID string  `json:"character_id"`
+	Skill       string  `json:"skill"`
+	XPAmount    float64 `json:"xp_amount"`
+}
+
+func (s *server) awardSkill(w http.ResponseWriter, r *http.Request) {
+	var req awardSkillReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.CharacterID == "" || req.Skill == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "character_id and skill are required")
+		return
+	}
+	if req.XPAmount <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "xp_amount must be greater than 0")
+		return
+	}
+	s.publish(w, "gm.award.skill", "award_skill", req)
 }

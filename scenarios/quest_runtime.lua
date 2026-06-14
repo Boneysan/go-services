@@ -166,6 +166,7 @@ function M:state()
     objective_text = obj and obj.text or nil,
     awaiting_choice = self.pending_choice ~= nil,
     choice_prompt = self.pending_choice and self.pending_choice.choice.prompt or nil,
+    choice_options = self.pending_choice and self.pending_choice.choice.options or nil,
   }
 end
 

@@ -37,6 +37,8 @@ func main() {
 		slog.Warn("GM_API_TOKEN not set — GM API is UNAUTHENTICATED (local dev only)")
 	}
 
+	geminiKey := config.Env("GEMINI_API_KEY", "")
+
 	nc, err := natspub.Connect(natsURL, "gm-api")
 	if err != nil {
 		slog.Error("gm-api: NATS connect", "err", err)
@@ -44,7 +46,7 @@ func main() {
 	}
 	defer nc.Close()
 
-	srv := &server{nats: nc, token: token, start: time.Now()}
+	srv := &server{nats: nc, token: token, geminiKey: geminiKey, start: time.Now()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /gm/spawn", srv.auth(srv.spawn))
@@ -53,13 +55,21 @@ func main() {
 	mux.HandleFunc("POST /gm/weather", srv.auth(srv.weather))
 	mux.HandleFunc("POST /gm/event/trigger", srv.auth(srv.eventTrigger))
 	mux.HandleFunc("POST /gm/script/run", srv.auth(srv.scriptRun))
+	mux.HandleFunc("POST /gm/quest/generate", srv.auth(srv.generateQuest))
+	mux.HandleFunc("POST /gm/dungeon/generate", srv.auth(srv.generateDungeon))
+	
+	mux.HandleFunc("POST /gm/tabletop/dice", srv.auth(srv.rollDice))
+	mux.HandleFunc("POST /gm/tabletop/fow", srv.auth(srv.toggleFOW))
+	mux.HandleFunc("POST /gm/tabletop/npc", srv.auth(srv.npcCommand))
+
+	initRedis(config.Env("REDIS_ADDR", "localhost:6379"))
 
 	// Phase 5.1 dashboard endpoints — not part of Task 4.5.
 	mux.HandleFunc("POST /gm/teleport", srv.auth(notImplemented))
 	mux.HandleFunc("GET /gm/zones/{zone_id}/entities", srv.auth(notImplemented))
 	mux.HandleFunc("POST /gm/scenario/start", srv.auth(notImplemented))
 	mux.HandleFunc("POST /gm/scenario/stop", srv.auth(notImplemented))
-	mux.HandleFunc("POST /gm/award/skill", srv.auth(notImplemented))
+	mux.HandleFunc("POST /gm/award/skill", srv.auth(srv.awardSkill))
 
 	mux.HandleFunc("GET /health", srv.health)
 

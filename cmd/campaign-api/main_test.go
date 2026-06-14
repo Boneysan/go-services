@@ -22,10 +22,12 @@ func TestNewBundleMarshalsEmptyCollections(t *testing.T) {
 	for _, want := range []string{
 		`"characters":[]`,
 		`"chronicle":[]`,
-		`"faction_standings":{}`,
+		`"faction_standings":[]`,
 		`"npc_attitudes":{}`,
-		`"world_events":[]`,
+		`"parties":[]`,
+		`"party_members":[]`,
 		`"party_stash":[]`,
+		`"world_state":[]`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("bundle JSON missing %s\n got: %s", want, s)

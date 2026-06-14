@@ -58,6 +58,8 @@ func main() {
 	mux.HandleFunc("GET /campaigns", srv.listCampaigns)
 	mux.HandleFunc("GET /campaign/{id}/export", srv.exportCampaign)
 	mux.HandleFunc("POST /campaign/import", srv.importCampaign)
+	mux.HandleFunc("GET /party/{id}/stash", srv.getPartyStash)
+	mux.HandleFunc("POST /party/{id}/stash", srv.updatePartyStash)
 	mux.HandleFunc("GET /health", health.Handler(map[string]string{"service": "campaign-api"}))
 
 	slog.Info("campaign-api starting", "addr", addr)
@@ -93,19 +95,69 @@ type Character struct {
 	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
 }
 
-// Bundle is the portable campaign archive (schema ryzom-campaign/v1). The
-// trailing collections are reserved for Phase 5.8/5.3a tables and are emitted
-// empty (but non-null) until those tables exist.
+type ChronicleChoice struct {
+	Storyline string    `json:"storyline"`
+	Quest     string    `json:"quest"`
+	Objective string    `json:"objective"`
+	ChoiceID  string    `json:"choice_id"`
+	AccountID string    `json:"account_id"`
+	DecidedAt time.Time `json:"decided_at"`
+}
+
+type FactionStanding struct {
+	AccountID string `json:"account_id"`
+	Faction   string `json:"faction"`
+	Standing  int    `json:"standing"`
+}
+
+type Party struct {
+	ID        string    `json:"id"`
+	CampaignID string   `json:"campaign_id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type PartyMember struct {
+	PartyID     string    `json:"party_id"`
+	CharacterID int64     `json:"character_id"`
+	JoinedAt    time.Time `json:"joined_at"`
+}
+
+type PartyStashItem struct {
+	PartyID     string `json:"party_id"`
+	ItemSheetID string `json:"item_sheet_id"`
+	Quantity    int    `json:"quantity"`
+}
+
+type WorldState struct {
+	CampaignID string    `json:"campaign_id"`
+	StateKey   string    `json:"state_key"`
+	StateValue any       `json:"state_value"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type WorldEvent struct {
+	ID          string    `json:"id"`
+	CampaignID  string    `json:"campaign_id"`
+	EventType   string    `json:"event_type"`
+	EventData   any       `json:"event_data"`
+	TriggeredAt time.Time `json:"triggered_at"`
+}
+
+// Bundle is the portable campaign archive (schema ryzom-campaign/v1).
 type Bundle struct {
-	Schema           string           `json:"schema"`
-	ExportedAt       time.Time        `json:"exported_at"`
-	Campaign         Campaign         `json:"campaign"`
-	Characters       []Character      `json:"characters"`
-	Chronicle        []map[string]any `json:"chronicle"`
-	FactionStandings map[string]any   `json:"faction_standings"`
-	NPCAttitudes     map[string]any   `json:"npc_attitudes"`
-	WorldEvents      []map[string]any `json:"world_events"`
-	PartyStash       []map[string]any `json:"party_stash"`
+	Schema           string            `json:"schema"`
+	ExportedAt       time.Time         `json:"exported_at"`
+	Campaign         Campaign          `json:"campaign"`
+	Characters       []Character       `json:"characters"`
+	Chronicle        []ChronicleChoice `json:"chronicle"`
+	FactionStandings []FactionStanding `json:"faction_standings"`
+	NPCAttitudes     map[string]any    `json:"npc_attitudes"`
+	Parties          []Party           `json:"parties"`
+	PartyMembers     []PartyMember     `json:"party_members"`
+	PartyStash       []PartyStashItem  `json:"party_stash"`
+	WorldState       []WorldState      `json:"world_state"`
+	WorldEvents      []WorldEvent      `json:"world_events"`
 }
 
 // newBundle returns a Bundle with all reserved collections initialised non-nil
@@ -115,11 +167,14 @@ func newBundle() Bundle {
 		Schema:           bundleSchema,
 		ExportedAt:       time.Now().UTC(),
 		Characters:       []Character{},
-		Chronicle:        []map[string]any{},
-		FactionStandings: map[string]any{},
+		Chronicle:        []ChronicleChoice{},
+		FactionStandings: []FactionStanding{},
 		NPCAttitudes:     map[string]any{},
-		WorldEvents:      []map[string]any{},
-		PartyStash:       []map[string]any{},
+		Parties:          []Party{},
+		PartyMembers:     []PartyMember{},
+		PartyStash:       []PartyStashItem{},
+		WorldState:       []WorldState{},
+		WorldEvents:      []WorldEvent{},
 	}
 }
 
@@ -172,6 +227,26 @@ func (s *server) exportCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	b.Characters = chars
 
+	chronicle, err := s.queryChronicle(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.Chronicle = chronicle
+
+	factions, err := s.queryFactionStandings(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	b.FactionStandings = factions
+
+	b.Parties, _ = s.queryParties(ctx, id)
+	b.PartyMembers, _ = s.queryPartyMembers(ctx, id)
+	b.PartyStash, _ = s.queryPartyStash(ctx, id)
+	b.WorldState, _ = s.queryWorldState(ctx, id)
+	b.WorldEvents, _ = s.queryWorldEvents(ctx, id)
+
 	slog.Info("campaign exported", "id", id, "characters", len(chars))
 	w.Header().Set("Content-Disposition", `attachment; filename="campaign_`+id+`.json"`)
 	writeJSON(w, http.StatusOK, b)
@@ -197,6 +272,113 @@ func (s *server) queryCharacters(ctx context.Context) ([]Character, error) {
 			return nil, err
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryChronicle(ctx context.Context) ([]ChronicleChoice, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT storyline, quest, objective, choice_id, account_id::text, decided_at
+		FROM chronicle_choices
+		ORDER BY decided_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ChronicleChoice{}
+	for rows.Next() {
+		var c ChronicleChoice
+		if err := rows.Scan(&c.Storyline, &c.Quest, &c.Objective, &c.ChoiceID, &c.AccountID, &c.DecidedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryFactionStandings(ctx context.Context) ([]FactionStanding, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT account_id::text, faction, standing
+		FROM faction_standings
+		ORDER BY account_id, faction`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []FactionStanding{}
+	for rows.Next() {
+		var f FactionStanding
+		if err := rows.Scan(&f.AccountID, &f.Faction, &f.Standing); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryParties(ctx context.Context, campaignID string) ([]Party, error) {
+	rows, err := s.db.Query(ctx, `SELECT id::text, campaign_id::text, name, created_at FROM parties WHERE campaign_id = $1`, campaignID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var out []Party
+	for rows.Next() {
+		var p Party
+		if err := rows.Scan(&p.ID, &p.CampaignID, &p.Name, &p.CreatedAt); err != nil { return nil, err }
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryPartyMembers(ctx context.Context, campaignID string) ([]PartyMember, error) {
+	rows, err := s.db.Query(ctx, `SELECT pm.party_id::text, pm.character_id, pm.joined_at FROM party_members pm JOIN parties p ON pm.party_id = p.id WHERE p.campaign_id = $1`, campaignID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var out []PartyMember
+	for rows.Next() {
+		var m PartyMember
+		if err := rows.Scan(&m.PartyID, &m.CharacterID, &m.JoinedAt); err != nil { return nil, err }
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryPartyStash(ctx context.Context, campaignID string) ([]PartyStashItem, error) {
+	rows, err := s.db.Query(ctx, `SELECT ps.party_id::text, ps.item_sheet_id, ps.quantity FROM party_stash ps JOIN parties p ON ps.party_id = p.id WHERE p.campaign_id = $1`, campaignID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var out []PartyStashItem
+	for rows.Next() {
+		var i PartyStashItem
+		if err := rows.Scan(&i.PartyID, &i.ItemSheetID, &i.Quantity); err != nil { return nil, err }
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryWorldState(ctx context.Context, campaignID string) ([]WorldState, error) {
+	rows, err := s.db.Query(ctx, `SELECT campaign_id::text, state_key, state_value, updated_at FROM world_state WHERE campaign_id = $1`, campaignID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var out []WorldState
+	for rows.Next() {
+		var w WorldState
+		if err := rows.Scan(&w.CampaignID, &w.StateKey, &w.StateValue, &w.UpdatedAt); err != nil { return nil, err }
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+func (s *server) queryWorldEvents(ctx context.Context, campaignID string) ([]WorldEvent, error) {
+	rows, err := s.db.Query(ctx, `SELECT id::text, campaign_id::text, event_type, event_data, triggered_at FROM world_events WHERE campaign_id = $1`, campaignID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var out []WorldEvent
+	for rows.Next() {
+		var w WorldEvent
+		if err := rows.Scan(&w.ID, &w.CampaignID, &w.EventType, &w.EventData, &w.TriggeredAt); err != nil { return nil, err }
+		out = append(out, w)
 	}
 	return out, rows.Err()
 }
@@ -259,26 +441,91 @@ func (s *server) importCampaign(w http.ResponseWriter, r *http.Request) {
 		imported++
 	}
 
+	for _, c := range b.Chronicle {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO chronicle_choices
+			    (storyline, quest, objective, choice_id, account_id, decided_at)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			c.Storyline, c.Quest, c.Objective, c.ChoiceID, c.AccountID, c.DecidedAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "chronicle insert: "+err.Error())
+			return
+		}
+	}
+
+	for _, f := range b.FactionStandings {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO faction_standings
+			    (account_id, faction, standing)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (account_id, faction) DO UPDATE
+			   SET standing = EXCLUDED.standing`,
+			f.AccountID, f.Faction, f.Standing); err != nil {
+			writeErr(w, http.StatusInternalServerError, "faction upsert: "+err.Error())
+			return
+		}
+	}
+
+	for _, p := range b.Parties {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO parties (id, campaign_id, name, created_at)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+			p.ID, p.CampaignID, p.Name, p.CreatedAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "party upsert: "+err.Error())
+			return
+		}
+	}
+
+	for _, m := range b.PartyMembers {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO party_members (party_id, character_id, joined_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (party_id, character_id) DO NOTHING`,
+			m.PartyID, m.CharacterID, m.JoinedAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "party member upsert: "+err.Error())
+			return
+		}
+	}
+
+	for _, s := range b.PartyStash {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO party_stash (party_id, item_sheet_id, quantity)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (party_id, item_sheet_id) DO UPDATE SET quantity = EXCLUDED.quantity`,
+			s.PartyID, s.ItemSheetID, s.Quantity); err != nil {
+			writeErr(w, http.StatusInternalServerError, "party stash upsert: "+err.Error())
+			return
+		}
+	}
+
+	for _, ws := range b.WorldState {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO world_state (campaign_id, state_key, state_value, updated_at)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (campaign_id, state_key) DO UPDATE SET state_value = EXCLUDED.state_value`,
+			ws.CampaignID, ws.StateKey, ws.StateValue, ws.UpdatedAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "world state upsert: "+err.Error())
+			return
+		}
+	}
+
+	for _, we := range b.WorldEvents {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO world_events (id, campaign_id, event_type, event_data, triggered_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (id) DO NOTHING`,
+			we.ID, we.CampaignID, we.EventType, we.EventData, we.TriggeredAt); err != nil {
+			writeErr(w, http.StatusInternalServerError, "world event insert: "+err.Error())
+			return
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		writeErr(w, http.StatusInternalServerError, "commit: "+err.Error())
 		return
 	}
 
-	// The reserved Phase 5.8/5.3a collections have no tables yet; flag if a
-	// caller sent data so it isn't silently dropped.
 	skipped := []string{}
-	if len(b.Chronicle) > 0 {
-		skipped = append(skipped, "chronicle")
-	}
-	if len(b.WorldEvents) > 0 {
-		skipped = append(skipped, "world_events")
-	}
-	if len(b.PartyStash) > 0 {
-		skipped = append(skipped, "party_stash")
-	}
-	if len(b.FactionStandings) > 0 {
-		skipped = append(skipped, "faction_standings")
-	}
 	if len(b.NPCAttitudes) > 0 {
 		skipped = append(skipped, "npc_attitudes")
 	}
@@ -290,4 +537,55 @@ func (s *server) importCampaign(w http.ResponseWriter, r *http.Request) {
 		"skipped_sections":    skipped,
 		"skipped_note":        "sections without tables are reserved for Phase 5.8/5.3a",
 	})
+}
+
+func (s *server) getPartyStash(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+	
+	// Use existing query function but adapted for direct party lookup
+	rows, err := s.db.Query(ctx, `SELECT party_id::text, item_sheet_id, quantity FROM party_stash WHERE party_id = $1`, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	var out []PartyStashItem
+	for rows.Next() {
+		var i PartyStashItem
+		if err := rows.Scan(&i.PartyID, &i.ItemSheetID, &i.Quantity); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, i)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"party_stash": out})
+}
+
+func (s *server) updatePartyStash(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+	
+	var req struct {
+		ItemSheetID string `json:"item_sheet_id"`
+		Quantity    int    `json:"quantity"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	
+	if req.Quantity <= 0 {
+		_, err := s.db.Exec(ctx, `DELETE FROM party_stash WHERE party_id = $1 AND item_sheet_id = $2`, id, req.ItemSheetID)
+		if err != nil { writeErr(w, http.StatusInternalServerError, err.Error()); return }
+	} else {
+		_, err := s.db.Exec(ctx, `
+			INSERT INTO party_stash (party_id, item_sheet_id, quantity) 
+			VALUES ($1, $2, $3)
+			ON CONFLICT (party_id, item_sheet_id) DO UPDATE SET quantity = EXCLUDED.quantity`, 
+			id, req.ItemSheetID, req.Quantity)
+		if err != nil { writeErr(w, http.StatusInternalServerError, err.Error()); return }
+	}
+	
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
