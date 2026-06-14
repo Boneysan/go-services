@@ -24,6 +24,15 @@ func newTestServer(token string) (*server, *fakePub) {
 	return &server{nats: pub, token: token, start: time.Now()}, pub
 }
 
+func envelopeCommand(t *testing.T, data []byte) string {
+	t.Helper()
+	var env envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatal(err)
+	}
+	return env.Command
+}
+
 func do(t *testing.T, h http.HandlerFunc, method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -151,6 +160,50 @@ func TestPartyManagementAndTeleport(t *testing.T) {
 	}
 	if pub.subject != "gm.set_anchor" {
 		t.Fatalf("set_anchor subject = %q, want gm.set_anchor", pub.subject)
+	}
+
+	// set_party_frontend — requires party_id; empty addr is allowed to clear the route
+	if w := do(t, srv.setPartyFrontend, "POST", "/gm/party/frontend", `{"addr":"localhost:47916"}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing party_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.setPartyFrontend, "POST", "/gm/party/frontend", `{"party_id":"p1","addr":"localhost:47916"}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("set_party_frontend: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.set_party_frontend" || envelopeCommand(t, pub.data) != "set_party_frontend" {
+		t.Fatalf("set_party_frontend publish wrong: %s %s", pub.subject, pub.data)
+	}
+
+	// set_instance_frontend — requires instance_id; empty addr clears all routes assigned to it
+	if w := do(t, srv.setInstanceFrontend, "POST", "/gm/instance/frontend", `{"addr":"localhost:47916"}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing instance_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.setInstanceFrontend, "POST", "/gm/instance/frontend", `{"instance_id":"i1","addr":"localhost:47916"}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("set_instance_frontend: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.set_instance_frontend" || envelopeCommand(t, pub.data) != "set_instance_frontend" {
+		t.Fatalf("set_instance_frontend publish wrong: %s %s", pub.subject, pub.data)
+	}
+
+	// assign_party_instance — requires both ids
+	if w := do(t, srv.assignPartyInstance, "POST", "/gm/party/instance", `{"party_id":"p1"}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing instance_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.assignPartyInstance, "POST", "/gm/party/instance", `{"party_id":"p1","instance_id":"i1"}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("assign_party_instance: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.assign_party_instance" || envelopeCommand(t, pub.data) != "assign_party_instance" {
+		t.Fatalf("assign_party_instance publish wrong: %s %s", pub.subject, pub.data)
+	}
+
+	// clear_party_instance — requires party_id
+	if w := do(t, srv.clearPartyInstance, "POST", "/gm/party/instance/clear", `{}`, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing party_id: got %d, want 400", w.Code)
+	}
+	if w := do(t, srv.clearPartyInstance, "POST", "/gm/party/instance/clear", `{"party_id":"p1"}`, nil); w.Code != http.StatusAccepted {
+		t.Fatalf("clear_party_instance: got %d, want 202: %s", w.Code, w.Body)
+	}
+	if pub.subject != "gm.clear_party_instance" || envelopeCommand(t, pub.data) != "clear_party_instance" {
+		t.Fatalf("clear_party_instance publish wrong: %s %s", pub.subject, pub.data)
 	}
 
 	// gmTeleport — requires char_id

@@ -295,3 +295,70 @@ func (s *server) setAnchor(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish(w, "gm.set_anchor", "set_anchor", req)
 }
+
+type setPartyFrontendReq struct {
+	PartyID string `json:"party_id"`
+	Addr    string `json:"addr"`
+}
+
+func (s *server) setPartyFrontend(w http.ResponseWriter, r *http.Request) {
+	var req setPartyFrontendReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.PartyID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "party_id is required")
+		return
+	}
+	s.publish(w, "gm.set_party_frontend", "set_party_frontend", req)
+}
+
+type setInstanceFrontendReq struct {
+	InstanceID string `json:"instance_id"`
+	Addr       string `json:"addr"`
+}
+
+func (s *server) setInstanceFrontend(w http.ResponseWriter, r *http.Request) {
+	var req setInstanceFrontendReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.InstanceID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "instance_id is required")
+		return
+	}
+	s.publish(w, "gm.set_instance_frontend", "set_instance_frontend", req)
+}
+
+type assignPartyInstanceReq struct {
+	PartyID    string `json:"party_id"`
+	InstanceID string `json:"instance_id"`
+}
+
+func (s *server) assignPartyInstance(w http.ResponseWriter, r *http.Request) {
+	var req assignPartyInstanceReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.PartyID == "" || req.InstanceID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "party_id and instance_id are required")
+		return
+	}
+	s.publish(w, "gm.assign_party_instance", "assign_party_instance", req)
+}
+
+type clearPartyInstanceReq struct {
+	PartyID string `json:"party_id"`
+}
+
+func (s *server) clearPartyInstance(w http.ResponseWriter, r *http.Request) {
+	var req clearPartyInstanceReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.PartyID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "party_id is required")
+		return
+	}
+	s.publish(w, "gm.clear_party_instance", "clear_party_instance", req)
+}

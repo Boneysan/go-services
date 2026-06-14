@@ -13,6 +13,9 @@
 //	POST   /gm/weather             -> gm.weather
 //	POST   /gm/event/trigger       -> gm.event.trigger
 //	POST   /gm/script/run          -> gm.script.run
+//	POST   /gm/party/frontend      -> gm.set_party_frontend
+//	POST   /gm/instance/frontend   -> gm.set_instance_frontend
+//	POST   /gm/party/instance      -> gm.assign_party_instance
 //
 // Until the EGS subscriber exists, accepted commands return 202 Accepted —
 // "published, execution pending". They will stay 202: execution is async by
@@ -80,6 +83,10 @@ func main() {
 	mux.HandleFunc("POST /gm/party/join", srv.auth(srv.joinParty))
 	mux.HandleFunc("POST /gm/party/leave", srv.auth(srv.leaveParty))
 	mux.HandleFunc("POST /gm/party/anchor", srv.auth(srv.setAnchor))
+	mux.HandleFunc("POST /gm/party/frontend", srv.auth(srv.setPartyFrontend))
+	mux.HandleFunc("POST /gm/instance/frontend", srv.auth(srv.setInstanceFrontend))
+	mux.HandleFunc("POST /gm/party/instance", srv.auth(srv.assignPartyInstance))
+	mux.HandleFunc("POST /gm/party/instance/clear", srv.auth(srv.clearPartyInstance))
 
 	mux.HandleFunc("GET /health", srv.health)
 
