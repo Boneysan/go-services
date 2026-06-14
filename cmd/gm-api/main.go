@@ -38,7 +38,7 @@ func main() {
 	}
 
 	geminiKey := config.Env("GEMINI_API_KEY", "")
-	geminiModel := config.Env("GEMINI_MODEL", "gemini-1.5-flash")
+	geminiModel := config.Env("GEMINI_MODEL", "gemini-2.0-flash-lite")
 
 	nc, err := natspub.Connect(natsURL, "gm-api")
 	if err != nil {

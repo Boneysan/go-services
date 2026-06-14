@@ -17,7 +17,7 @@ var geminiHTTP = &http.Client{Timeout: 60 * time.Second}
 
 var geminiURL = func(model, key string) string {
 	if model == "" {
-		model = "gemini-1.5-flash"
+		model = "gemini-2.0-flash-lite"
 	}
 	return "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + key
 }
