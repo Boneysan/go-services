@@ -167,6 +167,9 @@ function M:state()
     awaiting_choice = self.pending_choice ~= nil,
     choice_prompt = self.pending_choice and self.pending_choice.choice.prompt or nil,
     choice_options = self.pending_choice and self.pending_choice.choice.options or nil,
+    -- authored NPC dialogue (optional; set when the choice was generated/edited)
+    choice_npc = self.pending_choice and self.pending_choice.choice.npc or nil,
+    choice_npc_line = self.pending_choice and self.pending_choice.choice.npc_line or nil,
   }
 end
 
