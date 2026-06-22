@@ -93,3 +93,24 @@ func TestBundleRoundTripJSON(t *testing.T) {
 		t.Fatalf("nil egs entity id should stay nil, got %v", *out.Characters[1].EGSEntityID)
 	}
 }
+
+// TestCharactersQueryFiltering checks the Task 4.2c tail roster query: no
+// account_id means no WHERE clause / no args, a non-empty one adds exactly
+// one positional arg.
+func TestCharactersQueryFiltering(t *testing.T) {
+	query, args := charactersQuery("")
+	if strings.Contains(query, "WHERE") {
+		t.Errorf("empty account_id should not filter, got query: %s", query)
+	}
+	if len(args) != 0 {
+		t.Errorf("empty account_id should have no args, got %v", args)
+	}
+
+	query, args = charactersQuery("123")
+	if !strings.Contains(query, "WHERE account_id = $1") {
+		t.Errorf("non-empty account_id should filter by it, got query: %s", query)
+	}
+	if len(args) != 1 || args[0] != "123" {
+		t.Errorf("expected args=[123], got %v", args)
+	}
+}

@@ -19,7 +19,15 @@
 //	GET  /campaigns                list campaigns
 //	GET  /campaign/{id}/export     full JSON bundle (schema ryzom-campaign/v1)
 //	POST /campaign/import          restore a bundle (upsert campaign + characters)
+//	GET  /characters               roster read (Task 4.2c tail), optional ?account_id=
 //	GET  /health
+//
+// GET /characters is METADATA ONLY (name/race/gender/etc — the columns the
+// EGS dual-write mirrors into PostgreSQL, see egs_sheets_pgsql.cpp). It does
+// not carry inventory, stats, skills or position; that full character state
+// still lives exclusively in the binary PDR save files, and the GM dashboard
+// still needs ryzomcore's backup_service/web_connection.cpp for anything
+// beyond this roster view. See PROGRESS.md Task 4.2c.
 package main
 
 import (
@@ -62,6 +70,7 @@ func main() {
 	mux.HandleFunc("POST /party/{id}/stash", srv.updatePartyStash)
 	mux.HandleFunc("GET /party/{id}/camp", srv.getPartyCamp)
 	mux.HandleFunc("POST /campaign/onboard", srv.onboardCharacter)
+	mux.HandleFunc("GET /characters", srv.listCharacters)
 	mux.HandleFunc("GET /health", health.Handler(map[string]string{"service": "campaign-api"}))
 
 	slog.Info("campaign-api starting", "addr", addr)
@@ -254,13 +263,35 @@ func (s *server) exportCampaign(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, b)
 }
 
-// queryCharacters returns every character on the shard (single-campaign shard).
-func (s *server) queryCharacters(ctx context.Context) ([]Character, error) {
-	rows, err := s.db.Query(ctx, `
+// charactersQuery builds the roster SELECT, filtered to one account when
+// accountID is non-empty. Split out as a pure function so the filtering
+// logic is unit-testable without a database connection.
+func charactersQuery(accountID string) (string, []any) {
+	query := `
 		SELECT account_id, slot, name, race, gender,
 		       egs_entity_id, is_gm_character, source_file, created_at, last_login_at
-		FROM characters
-		ORDER BY account_id, slot`)
+		FROM characters`
+	var args []any
+	if accountID != "" {
+		query += " WHERE account_id = $1"
+		args = append(args, accountID)
+	}
+	query += " ORDER BY account_id, slot"
+	return query, args
+}
+
+// queryCharacters returns every character on the shard (single-campaign shard).
+func (s *server) queryCharacters(ctx context.Context) ([]Character, error) {
+	return s.queryCharactersFiltered(ctx, "")
+}
+
+// queryCharactersFiltered is the Task 4.2c tail roster read: a metadata-only
+// (name/race/gender/etc) view direct from PostgreSQL, optionally scoped to
+// one account_id. It deliberately does not attempt to read full character
+// state (inventory/stats/position) — that remains binary-PDR-only.
+func (s *server) queryCharactersFiltered(ctx context.Context, accountID string) ([]Character, error) {
+	query, args := charactersQuery(accountID)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +307,17 @@ func (s *server) queryCharacters(ctx context.Context) ([]Character, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// listCharacters serves GET /characters?account_id=... — see the package
+// doc comment for the metadata-only scope of this endpoint.
+func (s *server) listCharacters(w http.ResponseWriter, r *http.Request) {
+	chars, err := s.queryCharactersFiltered(r.Context(), r.URL.Query().Get("account_id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"characters": chars})
 }
 
 func (s *server) queryChronicle(ctx context.Context) ([]ChronicleChoice, error) {
